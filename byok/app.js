@@ -6,7 +6,7 @@ let lastSpokenWord = null;      // for spatial locality
 let animationId = null;
 let llmActive = false;
 let totalTokens = 0;
-let lastConceptCall = 0;
+let lastConceptCall = Date.now();
 let sentencesSinceLastConcept = 0;
 
 const STOP_WORDS = new Set([
@@ -330,17 +330,17 @@ Format your response as:
         const spawnPos = getConceptSpawnPosition(related);
         words.set(cWord, {
           text: cWord,
-          frequency: 2,
+          frequency: 1,
           x: spawnPos.x,
           y: spawnPos.y,
           vx: 0,
           vy: 0,
           targetX: spawnPos.x,
           targetY: spawnPos.y,
-          fontSize: 14,
-          targetFontSize: 14,
+          fontSize: 10,
+          targetFontSize: 10,
           opacity: 0,
-          targetOpacity: 1,
+          targetOpacity: 0.85,
           color: CONCEPT_TEXT,
           bgColor: CONCEPT_BG,
           birthTime: Date.now(),
@@ -394,8 +394,7 @@ function getConceptSpawnPosition(relatedWords) {
 setInterval(() => {
   if (!llmActive) return;
   const now = Date.now();
-  const delay = lastConceptCall === 0 ? 10000 : 30000;
-  if (now - lastConceptCall > delay) runConceptExtraction();
+  if (now - lastConceptCall > 60000) runConceptExtraction();
 }, 5000);
 
 // ── Speech Recognition ─────────────────────────────────────
@@ -597,15 +596,25 @@ function updatePhysics() {
     const weight = computeWeight(word);
     const secondsAgo = (Date.now() - word.lastMentioned) / 1000;
 
-    // Same physics for all words — concepts grow when re-extracted
-    word.targetFontSize = Math.min(72, Math.max(14, 14 + weight * 8));
-
-    if (secondsAgo > 60 * settings.decayMultiplier) {
-      const decayAmount = (secondsAgo - 60 * settings.decayMultiplier) / 120;
-      word.targetOpacity = Math.max(0.15, 1 - decayAmount);
-      word.targetFontSize = Math.max(10, word.targetFontSize * Math.max(0.5, 1 - decayAmount * 0.5));
+    if (word.source === 'llm-concept' && !word.promoted) {
+      // Concepts: small hints, capped size, gentle presence
+      word.targetFontSize = Math.min(16, Math.max(10, 10 + weight * 2));
+      if (secondsAgo > 90 * settings.decayMultiplier) {
+        const decayAmount = (secondsAgo - 90 * settings.decayMultiplier) / 120;
+        word.targetOpacity = Math.max(0.1, 0.85 - decayAmount);
+      } else {
+        word.targetOpacity = 0.85;
+      }
     } else {
-      word.targetOpacity = 1;
+      // Speech words (and promoted concepts): normal sizing
+      word.targetFontSize = Math.min(72, Math.max(14, 14 + weight * 8));
+      if (secondsAgo > 60 * settings.decayMultiplier) {
+        const decayAmount = (secondsAgo - 60 * settings.decayMultiplier) / 120;
+        word.targetOpacity = Math.max(0.15, 1 - decayAmount);
+        word.targetFontSize = Math.max(10, word.targetFontSize * Math.max(0.5, 1 - decayAmount * 0.5));
+      } else {
+        word.targetOpacity = 1;
+      }
     }
 
     const sp = settings.speed;
@@ -704,8 +713,8 @@ function render() {
     // Draw pastel rounded-rect background
     if (hasBackground && word.bgColor) {
       const textMetrics = ctx.measureText(word.text);
-      const padX = 10;
-      const padY = 5;
+      const padX = 8;
+      const padY = 4;
       const rectW = textMetrics.width + padX * 2;
       const rectH = size + padY * 2;
       ctx.globalAlpha = word.opacity;
