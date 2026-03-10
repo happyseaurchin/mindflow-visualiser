@@ -2,8 +2,17 @@
 
 const words = new Map();        // text → word object
 const sentences = [];           // recent sentences for co-occurrence
+const glyphs = [];              // glyph timeline
+const associationCache = new Map(); // word → [associations]
 let lastSpokenWord = null;      // for spatial locality
 let animationId = null;
+let llmActive = false;
+let totalTokens = 0;
+let lastSemanticCall = 0;
+let lastGlyphCall = 0;
+let sentencesSinceLastSemantic = 0;
+let transcriptSinceLastGlyph = '';
+let pendingAssociationCalls = 0;
 
 const STOP_WORDS = new Set([
   'i','me','my','myself','we','our','ours','ourselves','you','your','yours',
@@ -45,6 +54,10 @@ const PALETTE = [
   '#6abebe','#f49b7a','#ab8fd0','#7bafc8','#c8a47b',
   '#8bbe7b','#be7b9b'
 ];
+const SATELLITE_PALETTE = [
+  '#4a6b85','#5a7a6a','#8a7a5a','#7a5a5a','#6a5a7a',
+  '#4a7a7a','#7a6a5a','#6a5a7a'
+];
 let colorIdx = 0;
 
 // ── Settings ───────────────────────────────────────────────
@@ -67,7 +80,16 @@ const decaySlider = document.getElementById('decay-slider');
 const minFreqSlider = document.getElementById('min-freq-slider');
 const minFreqVal = document.getElementById('min-freq-val');
 const freezeBtn = document.getElementById('freeze-btn');
+const llmBtn = document.getElementById('llm-btn');
+const settingsBtn = document.getElementById('settings-btn');
 const screenshotBtn = document.getElementById('screenshot-btn');
+const settingsOverlay = document.getElementById('settings-overlay');
+const apiKeyInput = document.getElementById('api-key-input');
+const saveKeyBtn = document.getElementById('save-key-btn');
+const clearKeyBtn = document.getElementById('clear-key-btn');
+const closeSettingsBtn = document.getElementById('close-settings-btn');
+const tokenCountEl = document.getElementById('token-count');
+const glyphRail = document.getElementById('glyph-rail');
 
 let frozen = false;
 
@@ -81,6 +103,270 @@ function resizeCanvas() {
 }
 window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
+
+// ── LLM Integration ────────────────────────────────────────
+
+function getApiKey() {
+  return localStorage.getItem('mindflow-api-key') || '';
+}
+
+function setApiKey(key) {
+  if (key) localStorage.setItem('mindflow-api-key', key);
+  else localStorage.removeItem('mindflow-api-key');
+}
+
+async function callLLM(systemPrompt, userPrompt) {
+  const apiKey = getApiKey();
+  if (!apiKey) return null;
+
+  try {
+    llmBtn.classList.add('processing');
+    const res = await fetch('/api/llm', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 300,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userPrompt }]
+      })
+    });
+
+    const data = await res.json();
+    llmBtn.classList.remove('processing');
+
+    if (data.error) {
+      console.warn('LLM error:', data.error);
+      return null;
+    }
+
+    // Track tokens
+    if (data.usage) {
+      totalTokens += (data.usage.input_tokens || 0) + (data.usage.output_tokens || 0);
+      tokenCountEl.textContent = totalTokens.toLocaleString();
+    }
+
+    // Extract text content
+    if (data.content && data.content[0]) {
+      return data.content[0].text;
+    }
+    return null;
+  } catch (err) {
+    llmBtn.classList.remove('processing');
+    console.warn('LLM call failed:', err);
+    return null;
+  }
+}
+
+// ── Semantic Extraction ────────────────────────────────────
+
+async function runSemanticExtraction() {
+  if (!llmActive || !getApiKey() || sentencesSinceLastSemantic === 0) return;
+
+  const recentText = sentences.slice(-15).map(s => s.tokens.join(' ')).join('. ');
+  if (recentText.length < 20) return;
+
+  sentencesSinceLastSemantic = 0;
+  lastSemanticCall = Date.now();
+
+  const result = await callLLM(
+    'You analyse speech transcripts. Return ONLY valid JSON, no markdown.',
+    `Extract the 5-10 key concepts from this speech. For each, return the concept as a single lowercase word that appears in the text, a centrality score 1-5, and up to 3 related words from the text.
+
+Speech: "${recentText}"
+
+Return JSON: {"concepts": [{"word": "...", "centrality": 3, "related": ["...", "..."]}]}`
+  );
+
+  if (!result) return;
+
+  try {
+    const parsed = JSON.parse(result);
+    if (!parsed.concepts) return;
+
+    const semanticLinks = new Map();
+
+    parsed.concepts.forEach(concept => {
+      const w = words.get(concept.word);
+      if (w) {
+        w.llmWeight = concept.centrality || 1;
+        w.lastMentioned = Date.now(); // refresh it
+      }
+
+      // Build semantic links
+      if (concept.related) {
+        concept.related.forEach(rel => {
+          if (words.has(rel) && words.has(concept.word)) {
+            const key = [concept.word, rel].sort().join('|');
+            semanticLinks.set(key, (semanticLinks.get(key) || 0) + concept.centrality);
+          }
+        });
+      }
+    });
+
+    // Apply semantic attraction
+    applySemanticLinks(semanticLinks);
+  } catch (e) {
+    console.warn('Failed to parse semantic result:', e);
+  }
+}
+
+function applySemanticLinks(links) {
+  const cw = canvas.width / devicePixelRatio;
+  const ch = canvas.height / devicePixelRatio;
+  const cx = cw / 2;
+  const cy = ch / 2;
+
+  links.forEach((strength, key) => {
+    const [a, b] = key.split('|');
+    const wa = words.get(a);
+    const wb = words.get(b);
+    if (!wa || !wb) return;
+
+    // Pull related words toward each other (blended with centre)
+    const midX = (wa.x + wb.x) / 2;
+    const midY = (wa.y + wb.y) / 2;
+    const factor = Math.min(strength * 0.1, 0.3);
+
+    wa.targetX = wa.targetX * (1 - factor) + midX * factor;
+    wa.targetY = wa.targetY * (1 - factor) + midY * factor;
+    wb.targetX = wb.targetX * (1 - factor) + midX * factor;
+    wb.targetY = wb.targetY * (1 - factor) + midY * factor;
+  });
+}
+
+// ── Glyph Generation ───────────────────────────────────────
+
+async function runGlyphGeneration() {
+  if (!llmActive || !getApiKey() || transcriptSinceLastGlyph.length < 30) return;
+
+  const text = transcriptSinceLastGlyph;
+  transcriptSinceLastGlyph = '';
+  lastGlyphCall = Date.now();
+
+  const result = await callLLM(
+    'You synthesise speech into compact phrases. Return ONLY valid JSON, no markdown.',
+    `Synthesise this stretch of thinking into a single 2-6 word phrase that captures the core idea. Also indicate the tone.
+
+Speech: "${text}"
+
+Return JSON: {"glyph": "...", "tone": "warm|cool|neutral"}`
+  );
+
+  if (!result) return;
+
+  try {
+    const parsed = JSON.parse(result);
+    if (!parsed.glyph) return;
+
+    const glyph = {
+      text: parsed.glyph,
+      tone: parsed.tone || 'neutral',
+      time: Date.now(),
+      wordsAtTime: [...words.keys()].slice(-20)
+    };
+    glyphs.push(glyph);
+    renderGlyphRail();
+  } catch (e) {
+    console.warn('Failed to parse glyph result:', e);
+  }
+}
+
+function renderGlyphRail() {
+  glyphRail.innerHTML = '';
+  glyphs.forEach((glyph, i) => {
+    const el = document.createElement('div');
+    el.className = `glyph glyph-${glyph.tone}`;
+    el.textContent = glyph.text;
+    el.title = new Date(glyph.time).toLocaleTimeString();
+    el.addEventListener('click', () => highlightGlyphWords(glyph));
+    glyphRail.appendChild(el);
+  });
+  // Auto-scroll to latest
+  glyphRail.scrollLeft = glyphRail.scrollWidth;
+}
+
+function highlightGlyphWords(glyph) {
+  // Pulse all words that existed when this glyph was created
+  glyph.wordsAtTime.forEach(text => {
+    const w = words.get(text);
+    if (w) w.pulse = 1.5;
+  });
+}
+
+// ── Associative Search ─────────────────────────────────────
+
+async function runAssociativeSearch(wordText) {
+  if (!llmActive || !getApiKey()) return;
+  if (associationCache.has(wordText)) return;
+  if (pendingAssociationCalls >= 3) return;
+
+  pendingAssociationCalls++;
+  associationCache.set(wordText, []); // prevent duplicate calls
+
+  const result = await callLLM(
+    'You return associated concepts. Return ONLY a valid JSON array of strings, no markdown.',
+    `What are 3-5 concepts closely associated with "${wordText}" in intellectual discourse? Return a JSON array of lowercase single words: ["...", "..."]`
+  );
+
+  pendingAssociationCalls--;
+  if (!result) return;
+
+  try {
+    const associations = JSON.parse(result);
+    if (!Array.isArray(associations)) return;
+
+    associationCache.set(wordText, associations);
+
+    const parentWord = words.get(wordText);
+    if (!parentWord) return;
+
+    const now = Date.now();
+    associations.forEach((assoc, i) => {
+      const key = `~${assoc}`; // prefix to distinguish from spoken words
+      if (words.has(key)) return;
+
+      const angle = (i / associations.length) * Math.PI * 2;
+      const radius = 80;
+      words.set(key, {
+        text: assoc,
+        frequency: 0,
+        x: parentWord.x + Math.cos(angle) * radius,
+        y: parentWord.y + Math.sin(angle) * radius,
+        vx: 0,
+        vy: 0,
+        targetX: parentWord.x + Math.cos(angle) * radius,
+        targetY: parentWord.y + Math.sin(angle) * radius,
+        fontSize: 10,
+        targetFontSize: 10,
+        opacity: 0,
+        targetOpacity: 0.4,
+        color: SATELLITE_PALETTE[i % SATELLITE_PALETTE.length],
+        birthTime: now,
+        lastMentioned: now,
+        pulse: 1,
+        source: 'llm-association',
+        parentWord: wordText,
+        orbitAngle: angle,
+        llmWeight: 0,
+      });
+    });
+  } catch (e) {
+    console.warn('Failed to parse associations:', e);
+  }
+}
+
+// ── LLM Timers ─────────────────────────────────────────────
+
+setInterval(() => {
+  if (!llmActive) return;
+  const now = Date.now();
+  if (now - lastSemanticCall > 30000) runSemanticExtraction();
+  if (now - lastGlyphCall > 60000) runGlyphGeneration();
+}, 5000);
 
 // ── Speech Recognition ─────────────────────────────────────
 
@@ -113,12 +399,11 @@ function startListening() {
   };
 
   recognition.onerror = (event) => {
-    if (event.error === 'no-speech') return; // normal, just silence
+    if (event.error === 'no-speech') return;
     console.warn('Speech error:', event.error);
   };
 
   recognition.onend = () => {
-    // auto-restart if we're still supposed to be listening
     if (isListening) recognition.start();
   };
 
@@ -142,11 +427,14 @@ function addFinalTranscript(text) {
   transcriptEl.appendChild(p);
   transcriptEl.scrollTop = transcriptEl.scrollHeight;
 
-  // remove interim display
   const interim = transcriptEl.querySelector('.interim');
   if (interim) interim.remove();
 
   processText(text);
+
+  // Track for LLM
+  sentencesSinceLastSemantic++;
+  transcriptSinceLastGlyph += text + ' ';
 }
 
 function updateInterimDisplay(text) {
@@ -167,9 +455,7 @@ function processText(text) {
   const tokens = cleaned.split(/\s+/).filter(t => t.length > 1 && !STOP_WORDS.has(t));
   const now = Date.now();
 
-  // Track sentence for co-occurrence
   sentences.push({ tokens, time: now });
-  // Keep last 20 sentences
   if (sentences.length > 20) sentences.shift();
 
   tokens.forEach(token => {
@@ -177,7 +463,7 @@ function processText(text) {
       const w = words.get(token);
       w.frequency++;
       w.lastMentioned = now;
-      w.pulse = 1.3; // trigger pulse animation
+      w.pulse = 1.3;
     } else {
       const spawnPos = getSpawnPosition(token);
       words.set(token, {
@@ -197,12 +483,21 @@ function processText(text) {
         birthTime: now,
         lastMentioned: now,
         pulse: 1,
+        source: 'speech',
+        llmWeight: 0,
+        parentWord: null,
+        orbitAngle: 0,
       });
     }
     lastSpokenWord = words.get(token);
+
+    // Trigger association search for high-frequency words
+    const w = words.get(token);
+    if (llmActive && w.frequency >= 3 && !associationCache.has(token)) {
+      runAssociativeSearch(token);
+    }
   });
 
-  // Update co-occurrence targets
   updateCoOccurrenceTargets();
 }
 
@@ -211,13 +506,11 @@ function getSpawnPosition() {
   const h = canvas.height / devicePixelRatio;
 
   if (lastSpokenWord) {
-    // Near the last spoken word with some jitter
     return {
       x: lastSpokenWord.x + (Math.random() - 0.5) * 200,
       y: lastSpokenWord.y + (Math.random() - 0.5) * 150
     };
   }
-  // Centre with jitter
   return {
     x: w / 2 + (Math.random() - 0.5) * 200,
     y: h / 2 + (Math.random() - 0.5) * 150
@@ -225,7 +518,6 @@ function getSpawnPosition() {
 }
 
 function updateCoOccurrenceTargets() {
-  // Words that appear in the same sentence attract each other
   const coOccurrence = new Map();
 
   sentences.forEach(sentence => {
@@ -240,13 +532,24 @@ function updateCoOccurrenceTargets() {
     }
   });
 
-  // For each word, blend co-occurrence attraction with centre bias
   const cw = canvas.width / devicePixelRatio;
   const ch = canvas.height / devicePixelRatio;
   const cx = cw / 2;
   const cy = ch / 2;
 
   words.forEach((word, text) => {
+    // Satellites orbit their parent
+    if (word.source === 'llm-association' && word.parentWord) {
+      const parent = words.get(word.parentWord);
+      if (parent) {
+        word.orbitAngle += 0.003 * settings.speed;
+        const radius = 80;
+        word.targetX = parent.x + Math.cos(word.orbitAngle) * radius;
+        word.targetY = parent.y + Math.sin(word.orbitAngle) * radius;
+      }
+      return;
+    }
+
     let tx = 0, ty = 0, totalWeight = 0;
     coOccurrence.forEach((count, key) => {
       const [a, b] = key.split('|');
@@ -260,11 +563,9 @@ function updateCoOccurrenceTargets() {
       }
     });
     if (totalWeight > 0) {
-      // Blend: 40% co-occurrence, 60% centre — keeps words spread
       word.targetX = (tx / totalWeight) * 0.4 + cx * 0.6;
       word.targetY = (ty / totalWeight) * 0.4 + cy * 0.6;
     } else {
-      // No co-occurrence — gentle drift toward centre
       word.targetX = word.x * 0.7 + cx * 0.3;
       word.targetY = word.y * 0.7 + cy * 0.3;
     }
@@ -276,7 +577,8 @@ function updateCoOccurrenceTargets() {
 function computeWeight(word) {
   const secondsAgo = (Date.now() - word.lastMentioned) / 1000;
   const decayRate = 0.95;
-  return word.frequency * Math.pow(decayRate, secondsAgo * settings.decayMultiplier);
+  const base = word.frequency * Math.pow(decayRate, secondsAgo * settings.decayMultiplier);
+  return base + (word.llmWeight || 0) * 2;
 }
 
 function updatePhysics() {
@@ -288,24 +590,26 @@ function updatePhysics() {
     const weight = computeWeight(word);
     const secondsAgo = (Date.now() - word.lastMentioned) / 1000;
 
-    // Size from weight
-    word.targetFontSize = Math.min(72, Math.max(14, 14 + weight * 8));
-
-    // Decay: fade old words but never fully
-    if (secondsAgo > 60 * settings.decayMultiplier) {
-      const decayAmount = (secondsAgo - 60 * settings.decayMultiplier) / 120;
-      word.targetOpacity = Math.max(0.15, 1 - decayAmount);
-      word.targetFontSize = Math.max(10, word.targetFontSize * Math.max(0.5, 1 - decayAmount * 0.5));
+    if (word.source === 'llm-association') {
+      // Satellites stay small and faint
+      word.targetFontSize = 10;
+      word.targetOpacity = 0.4;
     } else {
-      word.targetOpacity = 1;
+      word.targetFontSize = Math.min(72, Math.max(14, 14 + weight * 8));
+
+      if (secondsAgo > 60 * settings.decayMultiplier) {
+        const decayAmount = (secondsAgo - 60 * settings.decayMultiplier) / 120;
+        word.targetOpacity = Math.max(0.15, 1 - decayAmount);
+        word.targetFontSize = Math.max(10, word.targetFontSize * Math.max(0.5, 1 - decayAmount * 0.5));
+      } else {
+        word.targetOpacity = 1;
+      }
     }
 
-    // Spring toward target (scaled by speed)
     const sp = settings.speed;
     word.vx += (word.targetX - word.x) * 0.005 * sp;
     word.vy += (word.targetY - word.y) * 0.005 * sp;
 
-    // Damping (heavier at low speed for less jitter)
     const damp = 1 - (0.08 / sp);
     word.vx *= damp;
     word.vy *= damp;
@@ -313,19 +617,14 @@ function updatePhysics() {
     word.x += word.vx;
     word.y += word.vy;
 
-    // Animate opacity
     word.opacity += (word.targetOpacity - word.opacity) * 0.08;
-
-    // Animate font size
     word.fontSize += (word.targetFontSize - word.fontSize) * 0.08;
 
-    // Pulse decay
     if (word.pulse > 1) {
       word.pulse += (1 - word.pulse) * 0.1;
       if (word.pulse < 1.01) word.pulse = 1;
     }
 
-    // Keep in bounds (account for word width)
     const textWidth = word.text.length * word.fontSize * 0.35;
     const margin = 20;
     if (word.x < margin + textWidth) { word.x = margin + textWidth; word.vx *= -0.5; }
@@ -334,14 +633,14 @@ function updatePhysics() {
     if (word.y > h - margin) { word.y = h - margin; word.vy *= -0.5; }
   });
 
-  // Collision repulsion (bounding box)
+  // Collision repulsion (skip satellites vs satellites)
   for (let i = 0; i < wordArray.length; i++) {
     for (let j = i + 1; j < wordArray.length; j++) {
       const a = wordArray[i];
       const b = wordArray[j];
 
-      // Skip nearly invisible words
       if (a.opacity < 0.2 && b.opacity < 0.2) continue;
+      if (a.source === 'llm-association' && b.source === 'llm-association') continue;
 
       const aWidth = a.text.length * a.fontSize * 0.6;
       const bWidth = b.text.length * b.fontSize * 0.6;
@@ -377,11 +676,12 @@ function render() {
   ctx.clearRect(0, 0, w, h);
 
   words.forEach(word => {
-    if (word.frequency < settings.minFrequency) return;
+    if (word.source === 'speech' && word.frequency < settings.minFrequency) return;
     if (word.opacity < 0.01) return;
 
     const size = word.fontSize * word.pulse;
-    ctx.font = `${size}px 'SF Mono', 'Fira Code', Consolas, monospace`;
+    const isAssociation = word.source === 'llm-association';
+    ctx.font = `${isAssociation ? 'italic ' : ''}${size}px 'SF Mono', 'Fira Code', Consolas, monospace`;
     ctx.fillStyle = word.color;
     ctx.globalAlpha = word.opacity;
     ctx.textAlign = 'center';
@@ -408,8 +708,13 @@ micBtn.addEventListener('click', () => {
 clearBtn.addEventListener('click', () => {
   words.clear();
   sentences.length = 0;
+  glyphs.length = 0;
+  associationCache.clear();
   lastSpokenWord = null;
   colorIdx = 0;
+  sentencesSinceLastSemantic = 0;
+  transcriptSinceLastGlyph = '';
+  glyphRail.innerHTML = '';
 });
 
 speedSlider.addEventListener('input', (e) => {
@@ -429,6 +734,42 @@ freezeBtn.addEventListener('click', () => {
   frozen = !frozen;
   freezeBtn.textContent = frozen ? 'Unfreeze' : 'Freeze';
   freezeBtn.classList.toggle('active', frozen);
+});
+
+llmBtn.addEventListener('click', () => {
+  if (!getApiKey()) {
+    settingsOverlay.classList.remove('hidden');
+    return;
+  }
+  llmActive = !llmActive;
+  llmBtn.textContent = llmActive ? 'LLM On' : 'LLM Off';
+  llmBtn.classList.toggle('active', llmActive);
+});
+
+settingsBtn.addEventListener('click', () => {
+  apiKeyInput.value = getApiKey();
+  settingsOverlay.classList.remove('hidden');
+});
+
+saveKeyBtn.addEventListener('click', () => {
+  setApiKey(apiKeyInput.value.trim());
+  settingsOverlay.classList.add('hidden');
+});
+
+clearKeyBtn.addEventListener('click', () => {
+  setApiKey(null);
+  apiKeyInput.value = '';
+  llmActive = false;
+  llmBtn.textContent = 'LLM Off';
+  llmBtn.classList.remove('active');
+});
+
+closeSettingsBtn.addEventListener('click', () => {
+  settingsOverlay.classList.add('hidden');
+});
+
+settingsOverlay.addEventListener('click', (e) => {
+  if (e.target === settingsOverlay) settingsOverlay.classList.add('hidden');
 });
 
 screenshotBtn.addEventListener('click', () => {
