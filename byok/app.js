@@ -49,8 +49,8 @@ const PALETTE = [
   '#6abebe','#f49b7a','#ab8fd0','#7bafc8','#c8a47b',
   '#8bbe7b','#be7b9b'
 ];
-const CONCEPT_BG = 'rgba(255, 255, 255, 0.12)';
-const CONCEPT_TEXT = '#1a1a1a';
+const CONCEPT_BG = 'rgba(255, 255, 255, 0.85)';
+const CONCEPT_TEXT = '#000000';
 let colorIdx = 0;
 
 // ── Settings ───────────────────────────────────────────────
@@ -313,28 +313,34 @@ Format your response as:
       const cWord = concept.word.toLowerCase();
       const related = (concept.related || []).map(r => r.toLowerCase());
 
-      // If concept matches an existing spoken word, promote it
-      if (words.has(cWord) && words.get(cWord).source === 'speech') {
+      if (words.has(cWord)) {
+        // Existing word (speech or concept) — bump frequency, promote if speech
         const existing = words.get(cWord);
-        existing.promoted = true;
+        existing.frequency += 1;
+        existing.lastMentioned = Date.now();
+        existing.pulse = 1.3;
+        if (existing.source === 'speech') {
+          existing.promoted = true;
+        }
         existing.bgColor = CONCEPT_BG;
-        injected.push(cWord + ' ✓');
-      } else if (!words.has(cWord)) {
-        // Inject as new concept word
+        existing.color = CONCEPT_TEXT;
+        injected.push(cWord + (existing.source === 'speech' ? ' ✓' : ' +'));
+      } else {
+        // New concept word — frequency 2 so it's visible immediately
         const spawnPos = getConceptSpawnPosition(related);
         words.set(cWord, {
           text: cWord,
-          frequency: 1,
+          frequency: 2,
           x: spawnPos.x,
           y: spawnPos.y,
           vx: 0,
           vy: 0,
           targetX: spawnPos.x,
           targetY: spawnPos.y,
-          fontSize: 12,
-          targetFontSize: 12,
+          fontSize: 14,
+          targetFontSize: 14,
           opacity: 0,
-          targetOpacity: 0.85,
+          targetOpacity: 1,
           color: CONCEPT_TEXT,
           bgColor: CONCEPT_BG,
           birthTime: Date.now(),
@@ -591,25 +597,15 @@ function updatePhysics() {
     const weight = computeWeight(word);
     const secondsAgo = (Date.now() - word.lastMentioned) / 1000;
 
-    if (word.source === 'llm-concept') {
-      // Concepts: fixed moderate size, slightly transparent
-      word.targetFontSize = Math.min(24, Math.max(12, 12 + weight * 4));
-      if (secondsAgo > 90 * settings.decayMultiplier) {
-        const decayAmount = (secondsAgo - 90 * settings.decayMultiplier) / 120;
-        word.targetOpacity = Math.max(0.1, 0.8 - decayAmount);
-      } else {
-        word.targetOpacity = 0.8;
-      }
-    } else {
-      word.targetFontSize = Math.min(72, Math.max(14, 14 + weight * 8));
+    // Same physics for all words — concepts grow when re-extracted
+    word.targetFontSize = Math.min(72, Math.max(14, 14 + weight * 8));
 
-      if (secondsAgo > 60 * settings.decayMultiplier) {
-        const decayAmount = (secondsAgo - 60 * settings.decayMultiplier) / 120;
-        word.targetOpacity = Math.max(0.15, 1 - decayAmount);
-        word.targetFontSize = Math.max(10, word.targetFontSize * Math.max(0.5, 1 - decayAmount * 0.5));
-      } else {
-        word.targetOpacity = 1;
-      }
+    if (secondsAgo > 60 * settings.decayMultiplier) {
+      const decayAmount = (secondsAgo - 60 * settings.decayMultiplier) / 120;
+      word.targetOpacity = Math.max(0.15, 1 - decayAmount);
+      word.targetFontSize = Math.max(10, word.targetFontSize * Math.max(0.5, 1 - decayAmount * 0.5));
+    } else {
+      word.targetOpacity = 1;
     }
 
     const sp = settings.speed;
@@ -708,13 +704,13 @@ function render() {
     // Draw pastel rounded-rect background
     if (hasBackground && word.bgColor) {
       const textMetrics = ctx.measureText(word.text);
-      const padX = 6;
-      const padY = 3;
+      const padX = 10;
+      const padY = 5;
       const rectW = textMetrics.width + padX * 2;
       const rectH = size + padY * 2;
       ctx.globalAlpha = word.opacity;
       ctx.fillStyle = word.bgColor;
-      drawRoundedRect(word.x - rectW / 2, word.y - rectH / 2, rectW, rectH, 4);
+      drawRoundedRect(word.x - rectW / 2, word.y - rectH / 2, rectW, rectH, Math.min(8, size * 0.2));
       ctx.fill();
     }
 
