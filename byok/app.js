@@ -465,12 +465,18 @@ function renderGlyphRail() {
 }
 
 function highlightGlyphWords(glyph) {
+  // Move boosted words to end of Map so they render on top
   glyph.wordsAtTime.forEach(text => {
     const w = words.get(text);
     if (!w) return;
     w.frequency += 1;
     w.lastMentioned = Date.now();
     w.pulse = 1.4;
+    w.opacity = 1;
+    w.targetOpacity = 1;
+    // Re-insert at end of Map = drawn last = on top
+    words.delete(text);
+    words.set(text, w);
   });
 }
 
