@@ -15,6 +15,8 @@ export default async function handler(req, res) {
     return res.status(401).json({ error: 'Missing x-api-key header' });
   }
 
+  const isStream = req.body && req.body.stream === true;
+
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -26,9 +28,28 @@ export default async function handler(req, res) {
       body: JSON.stringify(req.body)
     });
 
-    const data = await response.json();
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    return res.status(response.status).json(data);
+    if (isStream && response.ok) {
+      // Pass through SSE stream
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        res.write(decoder.decode(value, { stream: true }));
+      }
+      res.end();
+    } else {
+      // Non-streaming: return JSON
+      const data = await response.json();
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      return res.status(response.status).json(data);
+    }
   } catch (err) {
     return res.status(500).json({ error: 'Proxy error: ' + err.message });
   }

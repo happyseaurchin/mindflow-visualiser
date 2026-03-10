@@ -2,17 +2,12 @@
 
 const words = new Map();        // text → word object
 const sentences = [];           // recent sentences for co-occurrence
-const glyphs = [];              // glyph timeline
-const associationCache = new Map(); // word → [associations]
 let lastSpokenWord = null;      // for spatial locality
 let animationId = null;
 let llmActive = false;
 let totalTokens = 0;
-let lastSemanticCall = 0;
-let lastGlyphCall = 0;
-let sentencesSinceLastSemantic = 0;
-let transcriptSinceLastGlyph = '';
-let pendingAssociationCalls = 0;
+let lastConceptCall = 0;
+let sentencesSinceLastConcept = 0;
 
 const STOP_WORDS = new Set([
   'i','me','my','myself','we','our','ours','ourselves','you','your','yours',
@@ -54,11 +49,16 @@ const PALETTE = [
   '#6abebe','#f49b7a','#ab8fd0','#7bafc8','#c8a47b',
   '#8bbe7b','#be7b9b'
 ];
-const SATELLITE_PALETTE = [
-  '#4a6b85','#5a7a6a','#8a7a5a','#7a5a5a','#6a5a7a',
-  '#4a7a7a','#7a6a5a','#6a5a7a'
+const CONCEPT_PALETTE = [
+  'rgba(120, 180, 140, 0.15)', 'rgba(140, 160, 200, 0.15)',
+  'rgba(200, 160, 120, 0.15)', 'rgba(180, 140, 180, 0.15)',
+  'rgba(140, 200, 180, 0.15)'
+];
+const CONCEPT_TEXT_PALETTE = [
+  '#78b48c','#8ca0c8','#c8a078','#b48cb4','#8cc8b4'
 ];
 let colorIdx = 0;
+let conceptColorIdx = 0;
 
 // ── Settings ───────────────────────────────────────────────
 
@@ -73,6 +73,7 @@ const settings = {
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const transcriptEl = document.getElementById('transcript');
+const llmOutputEl = document.getElementById('llm-output');
 const micBtn = document.getElementById('mic-btn');
 const clearBtn = document.getElementById('clear-btn');
 const speedSlider = document.getElementById('speed-slider');
@@ -89,7 +90,6 @@ const saveKeyBtn = document.getElementById('save-key-btn');
 const clearKeyBtn = document.getElementById('clear-key-btn');
 const closeSettingsBtn = document.getElementById('close-settings-btn');
 const tokenCountEl = document.getElementById('token-count');
-const glyphRail = document.getElementById('glyph-rail');
 const llmStatus = document.getElementById('llm-status');
 
 let frozen = false;
@@ -125,6 +125,7 @@ function setApiKey(key) {
   else localStorage.removeItem('mindflow-api-key');
 }
 
+// Non-streaming call (for connection test)
 async function callLLM(systemPrompt, userPrompt) {
   const apiKey = getApiKey();
   if (!apiKey) return null;
@@ -133,10 +134,7 @@ async function callLLM(systemPrompt, userPrompt) {
     llmBtn.classList.add('processing');
     const res = await fetch('/api/llm', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey
-      },
+      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 300,
@@ -151,17 +149,12 @@ async function callLLM(systemPrompt, userPrompt) {
     if (data.error) {
       const msg = typeof data.error === 'object' ? data.error.message || JSON.stringify(data.error) : data.error;
       setLLMStatus('Error: ' + msg, 'error');
-      console.warn('LLM error:', data.error);
       return null;
     }
-
-    // Track tokens
     if (data.usage) {
       totalTokens += (data.usage.input_tokens || 0) + (data.usage.output_tokens || 0);
       tokenCountEl.textContent = totalTokens.toLocaleString();
     }
-
-    // Extract text content, strip markdown fences if present
     if (data.content && data.content[0]) {
       let text = data.content[0].text;
       text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '');
@@ -171,226 +164,221 @@ async function callLLM(systemPrompt, userPrompt) {
   } catch (err) {
     llmBtn.classList.remove('processing');
     setLLMStatus('Call failed: ' + err.message, 'error');
-    console.warn('LLM call failed:', err);
     return null;
   }
 }
 
-// ── Semantic Extraction ────────────────────────────────────
+// Streaming call — streams tokens into LLM panel, returns full text
+async function callLLMStreaming(systemPrompt, userPrompt, textEl) {
+  const apiKey = getApiKey();
+  if (!apiKey) return null;
 
-async function runSemanticExtraction() {
-  if (!llmActive || !getApiKey() || sentencesSinceLastSemantic === 0) return;
+  try {
+    llmBtn.classList.add('processing');
+    const res = await fetch('/api/llm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 500,
+        stream: true,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userPrompt }]
+      })
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      const msg = err.error?.message || err.error || res.statusText;
+      setLLMStatus('Error: ' + msg, 'error');
+      llmBtn.classList.remove('processing');
+      return null;
+    }
+
+    // Read SSE stream
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let fullText = '';
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop(); // keep incomplete line
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = line.slice(6);
+        if (data === '[DONE]') continue;
+
+        try {
+          const event = JSON.parse(data);
+
+          // Track tokens from message_start
+          if (event.type === 'message_start' && event.message?.usage) {
+            totalTokens += event.message.usage.input_tokens || 0;
+          }
+          // Track output tokens from message_delta
+          if (event.type === 'message_delta' && event.usage) {
+            totalTokens += event.usage.output_tokens || 0;
+            tokenCountEl.textContent = totalTokens.toLocaleString();
+          }
+          // Stream text deltas
+          if (event.type === 'content_block_delta' && event.delta?.text) {
+            fullText += event.delta.text;
+            textEl.textContent = fullText;
+            // Auto-scroll LLM panel
+            llmOutputEl.scrollTop = llmOutputEl.scrollHeight;
+          }
+        } catch (e) {
+          // skip unparseable lines
+        }
+      }
+    }
+
+    llmBtn.classList.remove('processing');
+    // Strip markdown fences
+    fullText = fullText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+    return fullText;
+  } catch (err) {
+    llmBtn.classList.remove('processing');
+    setLLMStatus('Stream failed: ' + err.message, 'error');
+    return null;
+  }
+}
+
+// ── Concept Extraction ────────────────────────────────────
+
+async function runConceptExtraction() {
+  if (!llmActive || !getApiKey() || sentencesSinceLastConcept === 0) return;
 
   const recentText = sentences.slice(-15).map(s => s.tokens.join(' ')).join('. ');
   if (recentText.length < 20) return;
 
-  sentencesSinceLastSemantic = 0;
-  lastSemanticCall = Date.now();
+  sentencesSinceLastConcept = 0;
+  lastConceptCall = Date.now();
   setLLMStatus('Extracting concepts...');
 
-  const result = await callLLM(
-    'You analyse speech transcripts. Return ONLY valid JSON, no markdown.',
-    `Extract the 5-10 key concepts from this speech. For each, return the concept as a single lowercase word that appears in the text, a centrality score 1-5, and up to 3 related words from the text.
+  // Create LLM panel entry
+  const entry = document.createElement('div');
+  entry.className = 'llm-entry';
+  const timeEl = document.createElement('div');
+  timeEl.className = 'llm-time';
+  timeEl.textContent = new Date().toLocaleTimeString();
+  const textEl = document.createElement('div');
+  textEl.className = 'llm-text';
+  const conceptsEl = document.createElement('div');
+  conceptsEl.className = 'llm-concepts';
+  entry.appendChild(timeEl);
+  entry.appendChild(textEl);
+  entry.appendChild(conceptsEl);
+  llmOutputEl.appendChild(entry);
+  llmOutputEl.scrollTop = llmOutputEl.scrollHeight;
+
+  const result = await callLLMStreaming(
+    'You analyse speech transcripts. Return ONLY valid JSON, no markdown fences.',
+    `Identify 1-5 underlying concepts — abstract ideas the speaker is circling around but may not have named directly. For each, give the concept as a single lowercase word and list which spoken words it relates to.
 
 Speech: "${recentText}"
 
-Return JSON: {"concepts": [{"word": "...", "centrality": 3, "related": ["...", "..."]}]}`
+Return JSON: {"concepts": [{"word": "emergence", "related": ["pattern", "complex", "system"]}]}`,
+    textEl
   );
 
   if (!result) return;
 
   try {
     const parsed = JSON.parse(result);
-    if (!parsed.concepts) return;
+    if (!parsed.concepts || !Array.isArray(parsed.concepts)) return;
 
-    const semanticLinks = new Map();
-
+    const injected = [];
     parsed.concepts.forEach(concept => {
-      const w = words.get(concept.word);
-      if (w) {
-        w.llmWeight = concept.centrality || 1;
-        w.lastMentioned = Date.now(); // refresh it
-      }
+      if (!concept.word) return;
+      const cWord = concept.word.toLowerCase();
+      const related = (concept.related || []).map(r => r.toLowerCase());
 
-      // Build semantic links
-      if (concept.related) {
-        concept.related.forEach(rel => {
-          if (words.has(rel) && words.has(concept.word)) {
-            const key = [concept.word, rel].sort().join('|');
-            semanticLinks.set(key, (semanticLinks.get(key) || 0) + concept.centrality);
-          }
+      // If concept matches an existing spoken word, promote it
+      if (words.has(cWord) && words.get(cWord).source === 'speech') {
+        const existing = words.get(cWord);
+        existing.promoted = true;
+        existing.bgColor = CONCEPT_PALETTE[conceptColorIdx % CONCEPT_PALETTE.length];
+        injected.push(cWord + ' (promoted)');
+      } else if (!words.has(cWord)) {
+        // Inject as new concept word
+        const spawnPos = getConceptSpawnPosition(related);
+        const ci = conceptColorIdx % CONCEPT_TEXT_PALETTE.length;
+        words.set(cWord, {
+          text: cWord,
+          frequency: 1,
+          x: spawnPos.x,
+          y: spawnPos.y,
+          vx: 0,
+          vy: 0,
+          targetX: spawnPos.x,
+          targetY: spawnPos.y,
+          fontSize: 12,
+          targetFontSize: 12,
+          opacity: 0,
+          targetOpacity: 0.8,
+          color: CONCEPT_TEXT_PALETTE[ci],
+          bgColor: CONCEPT_PALETTE[ci],
+          birthTime: Date.now(),
+          lastMentioned: Date.now(),
+          pulse: 1.3,
+          source: 'llm-concept',
+          promoted: false,
         });
+        injected.push(cWord);
       }
+      conceptColorIdx++;
     });
 
-    // Apply semantic attraction
-    applySemanticLinks(semanticLinks);
-    setLLMStatus(`Found ${parsed.concepts.length} concepts`);
+    if (injected.length > 0) {
+      conceptsEl.textContent = '→ ' + injected.join(', ');
+      setLLMStatus(`Injected: ${injected.join(', ')}`);
+    } else {
+      setLLMStatus('No new concepts');
+    }
   } catch (e) {
-    setLLMStatus('Parse error (semantic)', 'error');
-    console.warn('Failed to parse semantic result:', e);
+    setLLMStatus('Parse error', 'error');
+    conceptsEl.textContent = '(parse error)';
+    console.warn('Failed to parse concept result:', e);
   }
 }
 
-function applySemanticLinks(links) {
-  const cw = canvas.width / devicePixelRatio;
-  const ch = canvas.height / devicePixelRatio;
-  const cx = cw / 2;
-  const cy = ch / 2;
+function getConceptSpawnPosition(relatedWords) {
+  const w = canvas.width / devicePixelRatio;
+  const h = canvas.height / devicePixelRatio;
 
-  links.forEach((strength, key) => {
-    const [a, b] = key.split('|');
-    const wa = words.get(a);
-    const wb = words.get(b);
-    if (!wa || !wb) return;
-
-    // Pull related words toward each other (blended with centre)
-    const midX = (wa.x + wb.x) / 2;
-    const midY = (wa.y + wb.y) / 2;
-    const factor = Math.min(strength * 0.1, 0.3);
-
-    wa.targetX = wa.targetX * (1 - factor) + midX * factor;
-    wa.targetY = wa.targetY * (1 - factor) + midY * factor;
-    wb.targetX = wb.targetX * (1 - factor) + midX * factor;
-    wb.targetY = wb.targetY * (1 - factor) + midY * factor;
+  // Spawn near centroid of related spoken words
+  let tx = 0, ty = 0, count = 0;
+  relatedWords.forEach(r => {
+    const rw = words.get(r);
+    if (rw) { tx += rw.x; ty += rw.y; count++; }
   });
-}
 
-// ── Glyph Generation ───────────────────────────────────────
-
-async function runGlyphGeneration() {
-  if (!llmActive || !getApiKey() || transcriptSinceLastGlyph.length < 30) return;
-
-  const text = transcriptSinceLastGlyph;
-  transcriptSinceLastGlyph = '';
-  lastGlyphCall = Date.now();
-  setLLMStatus('Generating glyph...');
-
-  const result = await callLLM(
-    'You synthesise speech into compact phrases. Return ONLY valid JSON, no markdown.',
-    `Synthesise this stretch of thinking into a single 2-6 word phrase that captures the core idea. Also indicate the tone.
-
-Speech: "${text}"
-
-Return JSON: {"glyph": "...", "tone": "warm|cool|neutral"}`
-  );
-
-  if (!result) return;
-
-  try {
-    const parsed = JSON.parse(result);
-    if (!parsed.glyph) return;
-
-    const glyph = {
-      text: parsed.glyph,
-      tone: parsed.tone || 'neutral',
-      time: Date.now(),
-      wordsAtTime: [...words.keys()].slice(-20)
+  if (count > 0) {
+    return {
+      x: tx / count + (Math.random() - 0.5) * 100,
+      y: ty / count + (Math.random() - 0.5) * 80
     };
-    glyphs.push(glyph);
-    renderGlyphRail();
-    setLLMStatus(`Glyph: "${parsed.glyph}"`);
-  } catch (e) {
-    setLLMStatus('Parse error (glyph)', 'error');
-    console.warn('Failed to parse glyph result:', e);
   }
+  return {
+    x: w / 2 + (Math.random() - 0.5) * 200,
+    y: h / 2 + (Math.random() - 0.5) * 150
+  };
 }
 
-function renderGlyphRail() {
-  glyphRail.innerHTML = '';
-  glyphs.forEach((glyph, i) => {
-    const el = document.createElement('div');
-    el.className = `glyph glyph-${glyph.tone}`;
-    el.textContent = glyph.text;
-    el.title = new Date(glyph.time).toLocaleTimeString();
-    el.addEventListener('click', () => highlightGlyphWords(glyph));
-    glyphRail.appendChild(el);
-  });
-  // Auto-scroll to latest
-  glyphRail.scrollLeft = glyphRail.scrollWidth;
-}
-
-function highlightGlyphWords(glyph) {
-  // Pulse all words that existed when this glyph was created
-  glyph.wordsAtTime.forEach(text => {
-    const w = words.get(text);
-    if (w) w.pulse = 1.5;
-  });
-}
-
-// ── Associative Search ─────────────────────────────────────
-
-async function runAssociativeSearch(wordText) {
-  if (!llmActive || !getApiKey()) return;
-  if (associationCache.has(wordText)) return;
-  if (pendingAssociationCalls >= 3) return;
-
-  pendingAssociationCalls++;
-  associationCache.set(wordText, []); // prevent duplicate calls
-  setLLMStatus(`Associations for "${wordText}"...`);
-
-  const result = await callLLM(
-    'You return associated concepts. Return ONLY a valid JSON array of strings, no markdown.',
-    `What are 3-5 concepts closely associated with "${wordText}" in intellectual discourse? Return a JSON array of lowercase single words: ["...", "..."]`
-  );
-
-  pendingAssociationCalls--;
-  if (!result) return;
-
-  try {
-    const associations = JSON.parse(result);
-    if (!Array.isArray(associations)) return;
-
-    associationCache.set(wordText, associations);
-
-    const parentWord = words.get(wordText);
-    if (!parentWord) return;
-
-    const now = Date.now();
-    associations.forEach((assoc, i) => {
-      const key = `~${assoc}`; // prefix to distinguish from spoken words
-      if (words.has(key)) return;
-
-      const angle = (i / associations.length) * Math.PI * 2;
-      const radius = 80;
-      words.set(key, {
-        text: assoc,
-        frequency: 0,
-        x: parentWord.x + Math.cos(angle) * radius,
-        y: parentWord.y + Math.sin(angle) * radius,
-        vx: 0,
-        vy: 0,
-        targetX: parentWord.x + Math.cos(angle) * radius,
-        targetY: parentWord.y + Math.sin(angle) * radius,
-        fontSize: 10,
-        targetFontSize: 10,
-        opacity: 0,
-        targetOpacity: 0.4,
-        color: SATELLITE_PALETTE[i % SATELLITE_PALETTE.length],
-        birthTime: now,
-        lastMentioned: now,
-        pulse: 1,
-        source: 'llm-association',
-        parentWord: wordText,
-        orbitAngle: angle,
-        llmWeight: 0,
-      });
-    });
-  } catch (e) {
-    console.warn('Failed to parse associations:', e);
-  }
-}
-
-// ── LLM Timers ─────────────────────────────────────────────
+// ── LLM Timer ─────────────────────────────────────────────
 
 setInterval(() => {
   if (!llmActive) return;
   const now = Date.now();
-  // First call sooner (10s), then every 30s
-  const semanticDelay = lastSemanticCall === 0 ? 10000 : 30000;
-  const glyphDelay = lastGlyphCall === 0 ? 20000 : 60000;
-  if (now - lastSemanticCall > semanticDelay) runSemanticExtraction();
-  if (now - lastGlyphCall > glyphDelay) runGlyphGeneration();
+  const delay = lastConceptCall === 0 ? 10000 : 30000;
+  if (now - lastConceptCall > delay) runConceptExtraction();
 }, 5000);
 
 // ── Speech Recognition ─────────────────────────────────────
@@ -456,10 +444,7 @@ function addFinalTranscript(text) {
   if (interim) interim.remove();
 
   processText(text);
-
-  // Track for LLM
-  sentencesSinceLastSemantic++;
-  transcriptSinceLastGlyph += text + ' ';
+  sentencesSinceLastConcept++;
 }
 
 function updateInterimDisplay(text) {
@@ -509,18 +494,11 @@ function processText(text) {
         lastMentioned: now,
         pulse: 1,
         source: 'speech',
-        llmWeight: 0,
-        parentWord: null,
-        orbitAngle: 0,
+        promoted: false,
+        bgColor: null,
       });
     }
     lastSpokenWord = words.get(token);
-
-    // Trigger association search for high-frequency words
-    const w = words.get(token);
-    if (llmActive && w.frequency >= 3 && !associationCache.has(token)) {
-      runAssociativeSearch(token);
-    }
   });
 
   updateCoOccurrenceTargets();
@@ -563,18 +541,6 @@ function updateCoOccurrenceTargets() {
   const cy = ch / 2;
 
   words.forEach((word, text) => {
-    // Satellites orbit their parent
-    if (word.source === 'llm-association' && word.parentWord) {
-      const parent = words.get(word.parentWord);
-      if (parent) {
-        word.orbitAngle += 0.003 * settings.speed;
-        const radius = 80;
-        word.targetX = parent.x + Math.cos(word.orbitAngle) * radius;
-        word.targetY = parent.y + Math.sin(word.orbitAngle) * radius;
-      }
-      return;
-    }
-
     let tx = 0, ty = 0, totalWeight = 0;
     coOccurrence.forEach((count, key) => {
       const [a, b] = key.split('|');
@@ -602,8 +568,7 @@ function updateCoOccurrenceTargets() {
 function computeWeight(word) {
   const secondsAgo = (Date.now() - word.lastMentioned) / 1000;
   const decayRate = 0.95;
-  const base = word.frequency * Math.pow(decayRate, secondsAgo * settings.decayMultiplier);
-  return base + (word.llmWeight || 0) * 2;
+  return word.frequency * Math.pow(decayRate, secondsAgo * settings.decayMultiplier);
 }
 
 function updatePhysics() {
@@ -615,10 +580,15 @@ function updatePhysics() {
     const weight = computeWeight(word);
     const secondsAgo = (Date.now() - word.lastMentioned) / 1000;
 
-    if (word.source === 'llm-association') {
-      // Satellites stay small and faint
-      word.targetFontSize = 10;
-      word.targetOpacity = 0.4;
+    if (word.source === 'llm-concept') {
+      // Concepts: fixed moderate size, slightly transparent
+      word.targetFontSize = Math.min(24, Math.max(12, 12 + weight * 4));
+      if (secondsAgo > 90 * settings.decayMultiplier) {
+        const decayAmount = (secondsAgo - 90 * settings.decayMultiplier) / 120;
+        word.targetOpacity = Math.max(0.1, 0.8 - decayAmount);
+      } else {
+        word.targetOpacity = 0.8;
+      }
     } else {
       word.targetFontSize = Math.min(72, Math.max(14, 14 + weight * 8));
 
@@ -658,14 +628,12 @@ function updatePhysics() {
     if (word.y > h - margin) { word.y = h - margin; word.vy *= -0.5; }
   });
 
-  // Collision repulsion (skip satellites vs satellites)
+  // Collision repulsion — all words participate equally
   for (let i = 0; i < wordArray.length; i++) {
     for (let j = i + 1; j < wordArray.length; j++) {
       const a = wordArray[i];
       const b = wordArray[j];
-
       if (a.opacity < 0.2 && b.opacity < 0.2) continue;
-      if (a.source === 'llm-association' && b.source === 'llm-association') continue;
 
       const aWidth = a.text.length * a.fontSize * 0.6;
       const bWidth = b.text.length * b.fontSize * 0.6;
@@ -694,6 +662,20 @@ function updatePhysics() {
 
 // ── Rendering ──────────────────────────────────────────────
 
+function drawRoundedRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
 function render() {
   const w = canvas.width / devicePixelRatio;
   const h = canvas.height / devicePixelRatio;
@@ -705,12 +687,29 @@ function render() {
     if (word.opacity < 0.01) return;
 
     const size = word.fontSize * word.pulse;
-    const isAssociation = word.source === 'llm-association';
-    ctx.font = `${isAssociation ? 'italic ' : ''}${size}px 'SF Mono', 'Fira Code', Consolas, monospace`;
-    ctx.fillStyle = word.color;
-    ctx.globalAlpha = word.opacity;
+    const isConcept = word.source === 'llm-concept';
+    const hasBackground = isConcept || word.promoted;
+
+    ctx.font = `${isConcept ? 'italic ' : ''}${size}px 'SF Mono', 'Fira Code', Consolas, monospace`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
+
+    // Draw pastel rounded-rect background
+    if (hasBackground && word.bgColor) {
+      const textMetrics = ctx.measureText(word.text);
+      const padX = 6;
+      const padY = 3;
+      const rectW = textMetrics.width + padX * 2;
+      const rectH = size + padY * 2;
+      ctx.globalAlpha = word.opacity;
+      ctx.fillStyle = word.bgColor;
+      drawRoundedRect(word.x - rectW / 2, word.y - rectH / 2, rectW, rectH, 4);
+      ctx.fill();
+    }
+
+    // Draw word text
+    ctx.fillStyle = word.color;
+    ctx.globalAlpha = word.opacity;
     ctx.fillText(word.text, word.x, word.y);
   });
 
@@ -733,13 +732,11 @@ micBtn.addEventListener('click', () => {
 clearBtn.addEventListener('click', () => {
   words.clear();
   sentences.length = 0;
-  glyphs.length = 0;
-  associationCache.clear();
   lastSpokenWord = null;
   colorIdx = 0;
-  sentencesSinceLastSemantic = 0;
-  transcriptSinceLastGlyph = '';
-  glyphRail.innerHTML = '';
+  conceptColorIdx = 0;
+  sentencesSinceLastConcept = 0;
+  llmOutputEl.innerHTML = '';
 });
 
 speedSlider.addEventListener('input', (e) => {
@@ -771,13 +768,11 @@ llmBtn.addEventListener('click', async () => {
   llmBtn.classList.toggle('active', llmActive);
 
   if (llmActive) {
-    // Test connectivity
     setLLMStatus('Testing API connection...');
     const test = await callLLM('Respond with just "ok".', 'ping');
     if (test) {
-      setLLMStatus('Connected — speak to activate features');
+      setLLMStatus('Connected — speak to activate');
     }
-    // else callLLM already set the error status
   } else {
     setLLMStatus('');
   }

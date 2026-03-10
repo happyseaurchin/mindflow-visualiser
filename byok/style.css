@@ -15,10 +15,19 @@ body {
   height: 100vh;
 }
 
-#transcript-panel {
+/* ── Left Panel: Transcript + LLM ──────────────────── */
+
+#left-panel {
   grid-row: 1;
   grid-column: 1;
+  display: flex;
+  flex-direction: column;
   border-right: 1px solid #1a1a2e;
+  overflow: hidden;
+}
+
+#transcript-panel {
+  flex: 1;
   overflow-y: auto;
   padding: 1rem;
   font-size: 0.85rem;
@@ -31,71 +40,64 @@ body {
 #transcript .interim { color: #8888a0; }
 #transcript .final { color: #d0d0e0; }
 
+#llm-panel {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.8rem 1rem;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  border-top: 1px solid #1a1a2e;
+  background: #0c0c14;
+  color: #7a7a90;
+}
+
+#llm-panel::-webkit-scrollbar { width: 4px; }
+#llm-panel::-webkit-scrollbar-thumb { background: #2a2a3e; border-radius: 2px; }
+
+#llm-panel:empty::before {
+  content: 'LLM output will appear here';
+  color: #333348;
+  font-style: italic;
+}
+
+.llm-entry {
+  margin-bottom: 0.8rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid #15151f;
+}
+
+.llm-entry:last-child { border-bottom: none; }
+
+.llm-entry .llm-time {
+  color: #444458;
+  font-size: 0.65rem;
+  margin-bottom: 0.3rem;
+}
+
+.llm-entry .llm-text {
+  color: #8a8aa0;
+  white-space: pre-wrap;
+}
+
+.llm-entry .llm-concepts {
+  margin-top: 0.3rem;
+  color: #6a9a7a;
+  font-size: 0.7rem;
+}
+
+/* ── Canvas ────────────────────────────────────────── */
+
 #canvas-panel {
   grid-row: 1;
   grid-column: 2;
   position: relative;
   overflow: hidden;
-  display: flex;
-  flex-direction: column;
 }
 
 #canvas {
   width: 100%;
-  flex: 1;
+  height: 100%;
   display: block;
-}
-
-/* ── Glyph Rail ─────────────────────────────────────── */
-
-#glyph-rail {
-  display: flex;
-  gap: 0.5rem;
-  padding: 0.4rem 0.8rem;
-  overflow-x: auto;
-  overflow-y: hidden;
-  min-height: 2rem;
-  background: rgba(14, 14, 22, 0.8);
-  border-top: 1px solid #1a1a2e;
-  scrollbar-width: none;
-}
-
-#glyph-rail::-webkit-scrollbar { display: none; }
-
-#glyph-rail:empty { display: none; }
-
-.glyph {
-  flex-shrink: 0;
-  padding: 0.25rem 0.6rem;
-  border-radius: 12px;
-  font-size: 0.7rem;
-  cursor: pointer;
-  transition: opacity 0.2s, transform 0.15s;
-  white-space: nowrap;
-  border: 1px solid;
-}
-
-.glyph:hover {
-  opacity: 1 !important;
-  transform: scale(1.05);
-}
-
-.glyph-warm {
-  background: rgba(224, 100, 80, 0.15);
-  border-color: rgba(224, 100, 80, 0.4);
-  color: #e8a090;
-}
-
-.glyph-cool {
-  background: rgba(80, 140, 220, 0.15);
-  border-color: rgba(80, 140, 220, 0.4);
-  color: #90b8e8;
-}
-
-.glyph-neutral {
-  background: rgba(160, 160, 180, 0.1);
-  border-color: rgba(160, 160, 180, 0.3);
-  color: #a0a0b8;
 }
 
 /* ── Controls ───────────────────────────────────────── */
