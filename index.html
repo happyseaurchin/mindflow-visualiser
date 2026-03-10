@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MindFlow Visualiser</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <div id="transcript-panel">
+      <div id="transcript"></div>
+    </div>
+    <div id="canvas-panel">
+      <canvas id="canvas"></canvas>
+    </div>
+    <div id="controls">
+      <button id="mic-btn" title="Toggle microphone">Mic Off</button>
+      <button id="clear-btn" title="Clear canvas">Clear</button>
+      <label>Decay <input type="range" id="decay-slider" min="0.5" max="3" step="0.1" value="1"></label>
+      <label>Min freq <input type="range" id="min-freq-slider" min="1" max="5" step="1" value="1"><span id="min-freq-val">1</span></label>
+      <button id="screenshot-btn" title="Download screenshot">Screenshot</button>
+    </div>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
