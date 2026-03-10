@@ -597,11 +597,12 @@ function updatePhysics() {
     const secondsAgo = (Date.now() - word.lastMentioned) / 1000;
 
     if (word.source === 'llm-concept' && !word.promoted) {
-      // Concepts: small hints, capped size, gentle presence
+      // Concepts: small hints that fade within ~50s, cleared before next LLM call
       word.targetFontSize = Math.min(16, Math.max(10, 10 + weight * 2));
-      if (secondsAgo > 90 * settings.decayMultiplier) {
-        const decayAmount = (secondsAgo - 90 * settings.decayMultiplier) / 120;
-        word.targetOpacity = Math.max(0.1, 0.85 - decayAmount);
+      const fadeStart = 5;  // start fading after 5s
+      if (secondsAgo > fadeStart) {
+        const decayAmount = (secondsAgo - fadeStart) / 45;  // fully faded ~50s
+        word.targetOpacity = Math.max(0, 0.85 - decayAmount * 0.85);
       } else {
         word.targetOpacity = 0.85;
       }
