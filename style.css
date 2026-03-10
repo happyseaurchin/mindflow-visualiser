@@ -28,8 +28,8 @@ body {
 #transcript-panel::-webkit-scrollbar { width: 4px; }
 #transcript-panel::-webkit-scrollbar-thumb { background: #2a2a3e; border-radius: 2px; }
 
-#transcript .interim { color: #555568; }
-#transcript .final { color: #9898a8; }
+#transcript .interim { color: #8888a0; }
+#transcript .final { color: #d0d0e0; }
 
 #canvas-panel {
   grid-row: 1;
