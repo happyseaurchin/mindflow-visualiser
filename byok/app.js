@@ -90,8 +90,18 @@ const clearKeyBtn = document.getElementById('clear-key-btn');
 const closeSettingsBtn = document.getElementById('close-settings-btn');
 const tokenCountEl = document.getElementById('token-count');
 const glyphRail = document.getElementById('glyph-rail');
+const llmStatus = document.getElementById('llm-status');
 
 let frozen = false;
+
+function setLLMStatus(msg, type = 'info') {
+  llmStatus.textContent = msg;
+  llmStatus.className = `llm-status-${type}`;
+  if (type !== 'error') {
+    clearTimeout(llmStatus._timeout);
+    llmStatus._timeout = setTimeout(() => { llmStatus.textContent = ''; }, 5000);
+  }
+}
 
 // ── Canvas sizing ──────────────────────────────────────────
 
@@ -139,6 +149,8 @@ async function callLLM(systemPrompt, userPrompt) {
     llmBtn.classList.remove('processing');
 
     if (data.error) {
+      const msg = typeof data.error === 'object' ? data.error.message || JSON.stringify(data.error) : data.error;
+      setLLMStatus('Error: ' + msg, 'error');
       console.warn('LLM error:', data.error);
       return null;
     }
@@ -156,6 +168,7 @@ async function callLLM(systemPrompt, userPrompt) {
     return null;
   } catch (err) {
     llmBtn.classList.remove('processing');
+    setLLMStatus('Call failed: ' + err.message, 'error');
     console.warn('LLM call failed:', err);
     return null;
   }
@@ -171,6 +184,7 @@ async function runSemanticExtraction() {
 
   sentencesSinceLastSemantic = 0;
   lastSemanticCall = Date.now();
+  setLLMStatus('Extracting concepts...');
 
   const result = await callLLM(
     'You analyse speech transcripts. Return ONLY valid JSON, no markdown.',
@@ -209,7 +223,9 @@ Return JSON: {"concepts": [{"word": "...", "centrality": 3, "related": ["...", "
 
     // Apply semantic attraction
     applySemanticLinks(semanticLinks);
+    setLLMStatus(`Found ${parsed.concepts.length} concepts`);
   } catch (e) {
+    setLLMStatus('Parse error (semantic)', 'error');
     console.warn('Failed to parse semantic result:', e);
   }
 }
@@ -246,6 +262,7 @@ async function runGlyphGeneration() {
   const text = transcriptSinceLastGlyph;
   transcriptSinceLastGlyph = '';
   lastGlyphCall = Date.now();
+  setLLMStatus('Generating glyph...');
 
   const result = await callLLM(
     'You synthesise speech into compact phrases. Return ONLY valid JSON, no markdown.',
@@ -270,7 +287,9 @@ Return JSON: {"glyph": "...", "tone": "warm|cool|neutral"}`
     };
     glyphs.push(glyph);
     renderGlyphRail();
+    setLLMStatus(`Glyph: "${parsed.glyph}"`);
   } catch (e) {
+    setLLMStatus('Parse error (glyph)', 'error');
     console.warn('Failed to parse glyph result:', e);
   }
 }
@@ -306,6 +325,7 @@ async function runAssociativeSearch(wordText) {
 
   pendingAssociationCalls++;
   associationCache.set(wordText, []); // prevent duplicate calls
+  setLLMStatus(`Associations for "${wordText}"...`);
 
   const result = await callLLM(
     'You return associated concepts. Return ONLY a valid JSON array of strings, no markdown.',
@@ -364,8 +384,11 @@ async function runAssociativeSearch(wordText) {
 setInterval(() => {
   if (!llmActive) return;
   const now = Date.now();
-  if (now - lastSemanticCall > 30000) runSemanticExtraction();
-  if (now - lastGlyphCall > 60000) runGlyphGeneration();
+  // First call sooner (10s), then every 30s
+  const semanticDelay = lastSemanticCall === 0 ? 10000 : 30000;
+  const glyphDelay = lastGlyphCall === 0 ? 20000 : 60000;
+  if (now - lastSemanticCall > semanticDelay) runSemanticExtraction();
+  if (now - lastGlyphCall > glyphDelay) runGlyphGeneration();
 }, 5000);
 
 // ── Speech Recognition ─────────────────────────────────────
@@ -736,7 +759,7 @@ freezeBtn.addEventListener('click', () => {
   freezeBtn.classList.toggle('active', frozen);
 });
 
-llmBtn.addEventListener('click', () => {
+llmBtn.addEventListener('click', async () => {
   if (!getApiKey()) {
     settingsOverlay.classList.remove('hidden');
     return;
@@ -744,6 +767,18 @@ llmBtn.addEventListener('click', () => {
   llmActive = !llmActive;
   llmBtn.textContent = llmActive ? 'LLM On' : 'LLM Off';
   llmBtn.classList.toggle('active', llmActive);
+
+  if (llmActive) {
+    // Test connectivity
+    setLLMStatus('Testing API connection...');
+    const test = await callLLM('Respond with just "ok".', 'ping');
+    if (test) {
+      setLLMStatus('Connected — speak to activate features');
+    }
+    // else callLLM already set the error status
+  } else {
+    setLLMStatus('');
+  }
 });
 
 settingsBtn.addEventListener('click', () => {

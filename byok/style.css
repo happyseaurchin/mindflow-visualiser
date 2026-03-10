@@ -152,6 +152,18 @@ body {
   50% { opacity: 0.5; }
 }
 
+#llm-status {
+  font-size: 0.7rem;
+  color: #666680;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.llm-status-info { color: #40c060; }
+.llm-status-error { color: #e04060; }
+
 #controls label {
   display: flex;
   align-items: center;
