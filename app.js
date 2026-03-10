@@ -41,9 +41,9 @@ const STOP_WORDS = new Set([
 ]);
 
 const PALETTE = [
-  '#3a7bd5','#5e8c6a','#d4a853','#c75c5c','#7b68ae',
-  '#4a9e9e','#d47b5a','#8b6fb0','#5b8fa8','#a8845b',
-  '#6b9e5b','#9e5b7b'
+  '#5a9bf5','#7ebc8a','#f4c873','#e87c7c','#9b88ce',
+  '#6abebe','#f49b7a','#ab8fd0','#7bafc8','#c8a47b',
+  '#8bbe7b','#be7b9b'
 ];
 let colorIdx = 0;
 
