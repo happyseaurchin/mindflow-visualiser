@@ -66,7 +66,10 @@ const speedSlider = document.getElementById('speed-slider');
 const decaySlider = document.getElementById('decay-slider');
 const minFreqSlider = document.getElementById('min-freq-slider');
 const minFreqVal = document.getElementById('min-freq-val');
+const freezeBtn = document.getElementById('freeze-btn');
 const screenshotBtn = document.getElementById('screenshot-btn');
+
+let frozen = false;
 
 // ── Canvas sizing ──────────────────────────────────────────
 
@@ -390,7 +393,7 @@ function render() {
 }
 
 function animate() {
-  updatePhysics();
+  if (!frozen) updatePhysics();
   render();
   animationId = requestAnimationFrame(animate);
 }
@@ -420,6 +423,12 @@ decaySlider.addEventListener('input', (e) => {
 minFreqSlider.addEventListener('input', (e) => {
   settings.minFrequency = parseInt(e.target.value);
   minFreqVal.textContent = e.target.value;
+});
+
+freezeBtn.addEventListener('click', () => {
+  frozen = !frozen;
+  freezeBtn.textContent = frozen ? 'Unfreeze' : 'Freeze';
+  freezeBtn.classList.toggle('active', frozen);
 });
 
 screenshotBtn.addEventListener('click', () => {

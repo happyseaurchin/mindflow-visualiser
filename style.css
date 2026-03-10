@@ -74,6 +74,12 @@ body {
   color: #e04060;
 }
 
+#freeze-btn.active {
+  background: #1a1a2e;
+  border-color: #3a7bd5;
+  color: #3a7bd5;
+}
+
 #controls label {
   display: flex;
   align-items: center;
