@@ -3,46 +3,122 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MindFlow BYOK</title>
-  <link rel="stylesheet" href="style.css">
+  <title>MindFlow</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #0a0a0f;
+      color: #c8c8d0;
+      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+
+    h1 {
+      font-size: 2rem;
+      font-weight: 300;
+      letter-spacing: 0.1em;
+      margin-bottom: 0.5rem;
+      color: #e0e0e8;
+    }
+
+    .subtitle {
+      font-size: 0.85rem;
+      color: #666680;
+      margin-bottom: 3rem;
+    }
+
+    .cards {
+      display: flex;
+      gap: 1.5rem;
+      flex-wrap: wrap;
+      justify-content: center;
+      max-width: 900px;
+    }
+
+    .card {
+      background: #12121e;
+      border: 1px solid #1a1a2e;
+      border-radius: 8px;
+      padding: 1.5rem;
+      width: 260px;
+      text-decoration: none;
+      color: inherit;
+      transition: border-color 0.2s, transform 0.15s;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .card:hover {
+      transform: translateY(-2px);
+    }
+
+    .card h2 {
+      font-size: 1rem;
+      font-weight: 500;
+      margin-bottom: 0.6rem;
+    }
+
+    .card p {
+      font-size: 0.75rem;
+      color: #888;
+      line-height: 1.5;
+      flex: 1;
+    }
+
+    .card .tag {
+      display: inline-block;
+      font-size: 0.65rem;
+      padding: 0.2rem 0.5rem;
+      border-radius: 10px;
+      margin-top: 1rem;
+      align-self: flex-start;
+    }
+
+    .card-basic { border-color: #2a3a2a; }
+    .card-basic:hover { border-color: #40c060; }
+    .card-basic h2 { color: #7ebc8a; }
+    .card-basic .tag { background: rgba(64, 192, 96, 0.15); color: #7ebc8a; }
+
+    .card-byok { border-color: #2a2a3a; }
+    .card-byok:hover { border-color: #5a9bf5; }
+    .card-byok h2 { color: #5a9bf5; }
+    .card-byok .tag { background: rgba(90, 155, 245, 0.15); color: #5a9bf5; }
+
+    .card-pro { border-color: #2a1a2a; }
+    .card-pro:hover { border-color: #9b88ce; }
+    .card-pro h2 { color: #9b88ce; }
+    .card-pro .tag { background: rgba(155, 136, 206, 0.15); color: #9b88ce; }
+    .card-pro { opacity: 0.5; pointer-events: none; }
+  </style>
 </head>
 <body>
-  <div id="app">
-    <div id="transcript-panel">
-      <div id="transcript"></div>
-    </div>
-    <div id="canvas-panel">
-      <canvas id="canvas"></canvas>
-      <div id="glyph-rail"></div>
-    </div>
-    <div id="controls">
-      <button id="mic-btn" title="Toggle microphone">Mic Off</button>
-      <button id="clear-btn" title="Clear canvas">Clear</button>
-      <label>Speed <input type="range" id="speed-slider" min="0.1" max="1" step="0.05" value="0.3"></label>
-      <label>Decay <input type="range" id="decay-slider" min="0.5" max="3" step="0.1" value="1"></label>
-      <label>Min freq <input type="range" id="min-freq-slider" min="1" max="5" step="1" value="1"><span id="min-freq-val">1</span></label>
-      <button id="freeze-btn" title="Freeze/unfreeze canvas">Freeze</button>
-      <button id="llm-btn" title="Toggle LLM features">LLM Off</button>
-      <button id="settings-btn" title="API key settings">Settings</button>
-      <button id="screenshot-btn" title="Download screenshot">Screenshot</button>
+  <h1>MindFlow</h1>
+  <p class="subtitle">see your thinking take shape</p>
+
+  <div class="cards">
+    <a href="basic/" class="card card-basic">
+      <h2>Basic</h2>
+      <p>Pure word cloud. Speak and watch your words arrange themselves by frequency, recency, and co-occurrence. No account needed.</p>
+      <span class="tag">Free</span>
+    </a>
+
+    <a href="byok/" class="card card-byok">
+      <h2>BYOK</h2>
+      <p>Bring your own Anthropic API key. Adds semantic extraction, glyph synthesis, and associative search powered by Claude.</p>
+      <span class="tag">Your API key</span>
+    </a>
+
+    <div class="card card-pro">
+      <h2>Pro</h2>
+      <p>Full LLM-powered experience. No API key needed. Everything in BYOK plus deeper analysis and persistent sessions.</p>
+      <span class="tag">Coming soon</span>
     </div>
   </div>
-
-  <div id="settings-overlay" class="hidden">
-    <div id="settings-panel">
-      <h3>Settings</h3>
-      <label for="api-key-input">Anthropic API Key</label>
-      <input type="password" id="api-key-input" placeholder="sk-ant-..." autocomplete="off">
-      <p class="settings-warning">Your key is stored locally in your browser. It's sent to our proxy which forwards it to Anthropic — it's never stored on our server. Set a spend limit on your <a href="https://console.anthropic.com/settings/limits" target="_blank">Anthropic dashboard</a>.</p>
-      <div class="settings-actions">
-        <button id="save-key-btn">Save Key</button>
-        <button id="clear-key-btn">Clear Key</button>
-        <button id="close-settings-btn">Close</button>
-      </div>
-      <div id="token-counter">Tokens this session: <span id="token-count">0</span></div>
-    </div>
-  </div>
-
-  <script src="app.js"></script>
 </body>
 </html>
