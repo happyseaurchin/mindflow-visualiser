@@ -9,6 +9,8 @@ let totalTokens = 0;
 let lastConceptCall = Date.now();
 let sentencesSinceLastConcept = 0;
 const glyphs = [];
+let viewMode = 'words';          // 'words' or 'images'
+const imageCache = new Map();    // word → { img: HTMLImageElement|null, loading: boolean }
 
 const STOP_WORDS = new Set([
   'i','me','my','myself','we','our','ours','ourselves','you','your','yours',
@@ -86,6 +88,7 @@ const closeSettingsBtn = document.getElementById('close-settings-btn');
 const tokenCountEl = document.getElementById('token-count');
 const llmStatus = document.getElementById('llm-status');
 const glyphRail = document.getElementById('glyph-rail');
+const viewModeBtn = document.getElementById('view-mode-btn');
 
 let frozen = false;
 
@@ -108,6 +111,47 @@ function resizeCanvas() {
 }
 window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
+
+// ── Image Fetching ────────────────────────────────────────
+
+function fetchWordImage(word) {
+  if (imageCache.has(word)) return;
+  imageCache.set(word, { img: null, loading: true });
+
+  // Wikimedia Commons supports CORS natively with origin=*
+  const searchUrl = `https://commons.wikimedia.org/w/api.php?action=query&list=search&srnamespace=6&srsearch=${encodeURIComponent(word)}&srlimit=1&format=json&origin=*`;
+
+  fetch(searchUrl)
+    .then(r => r.json())
+    .then(searchData => {
+      const results = searchData?.query?.search;
+      if (!results || results.length === 0) {
+        imageCache.set(word, { img: null, loading: false });
+        return;
+      }
+      // Get thumbnail URL from file info
+      const fileTitle = results[0].title;
+      const infoUrl = `https://commons.wikimedia.org/w/api.php?action=query&titles=${encodeURIComponent(fileTitle)}&prop=imageinfo&iiprop=url&iiurlwidth=300&format=json&origin=*`;
+      return fetch(infoUrl).then(r => r.json());
+    })
+    .then(infoData => {
+      if (!infoData) return;
+      const pages = infoData?.query?.pages;
+      if (!pages) { imageCache.set(word, { img: null, loading: false }); return; }
+      const page = Object.values(pages)[0];
+      const thumbUrl = page?.imageinfo?.[0]?.thumburl;
+      if (!thumbUrl) { imageCache.set(word, { img: null, loading: false }); return; }
+
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => { imageCache.set(word, { img, loading: false }); };
+      img.onerror = () => { imageCache.set(word, { img: null, loading: false }); };
+      img.src = thumbUrl;
+    })
+    .catch(() => {
+      imageCache.set(word, { img: null, loading: false });
+    });
+}
 
 // ── LLM Integration ────────────────────────────────────────
 
@@ -352,6 +396,7 @@ Format your response as:
           promoted: false,
         });
         injected.push(cWord);
+        fetchWordImage(cWord);
       }
     });
 
@@ -551,6 +596,7 @@ function processText(text) {
         promoted: false,
         bgColor: null,
       });
+      fetchWordImage(token);
     }
     lastSpokenWord = words.get(token);
   });
@@ -745,27 +791,66 @@ function render() {
     const isConcept = word.source === 'llm-concept';
     const hasBackground = isConcept || word.promoted;
 
-    ctx.font = `${isConcept ? 'italic ' : ''}${size}px 'SF Mono', 'Fira Code', Consolas, monospace`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
+    if (viewMode === 'images') {
+      // ── Image mode ──
+      const cached = imageCache.get(word.text);
+      if (cached && cached.img) {
+        const img = cached.img;
+        const imgSize = size * 2.5;
+        const aspect = img.naturalWidth / img.naturalHeight;
+        let drawW, drawH;
+        if (aspect >= 1) {
+          drawW = imgSize;
+          drawH = imgSize / aspect;
+        } else {
+          drawH = imgSize;
+          drawW = imgSize * aspect;
+        }
+        ctx.globalAlpha = word.opacity;
+        // Rounded clip for images
+        ctx.save();
+        drawRoundedRect(word.x - drawW / 2, word.y - drawH / 2, drawW, drawH, Math.min(8, imgSize * 0.1));
+        ctx.clip();
+        ctx.drawImage(img, word.x - drawW / 2, word.y - drawH / 2, drawW, drawH);
+        ctx.restore();
+        // Small label below image
+        ctx.font = `${Math.max(9, size * 0.4)}px 'SF Mono', 'Fira Code', Consolas, monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        ctx.fillStyle = '#888';
+        ctx.globalAlpha = word.opacity * 0.7;
+        ctx.fillText(word.text, word.x, word.y + drawH / 2 + 2);
+      } else {
+        // Fallback: draw text while image loads or if unavailable
+        ctx.font = `${isConcept ? 'italic ' : ''}${size}px 'SF Mono', 'Fira Code', Consolas, monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = cached && !cached.loading ? '#555' : word.color;
+        ctx.globalAlpha = word.opacity * (cached && !cached.loading ? 0.5 : 1);
+        ctx.fillText(word.text, word.x, word.y);
+      }
+    } else {
+      // ── Word mode (unchanged) ──
+      ctx.font = `${isConcept ? 'italic ' : ''}${size}px 'SF Mono', 'Fira Code', Consolas, monospace`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
 
-    // Draw pastel rounded-rect background
-    if (hasBackground && word.bgColor) {
-      const textMetrics = ctx.measureText(word.text);
-      const padX = 8;
-      const padY = 4;
-      const rectW = textMetrics.width + padX * 2;
-      const rectH = size + padY * 2;
+      if (hasBackground && word.bgColor) {
+        const textMetrics = ctx.measureText(word.text);
+        const padX = 8;
+        const padY = 4;
+        const rectW = textMetrics.width + padX * 2;
+        const rectH = size + padY * 2;
+        ctx.globalAlpha = word.opacity;
+        ctx.fillStyle = word.bgColor;
+        drawRoundedRect(word.x - rectW / 2, word.y - rectH / 2, rectW, rectH, Math.min(8, size * 0.2));
+        ctx.fill();
+      }
+
+      ctx.fillStyle = word.color;
       ctx.globalAlpha = word.opacity;
-      ctx.fillStyle = word.bgColor;
-      drawRoundedRect(word.x - rectW / 2, word.y - rectH / 2, rectW, rectH, Math.min(8, size * 0.2));
-      ctx.fill();
+      ctx.fillText(word.text, word.x, word.y);
     }
-
-    // Draw word text
-    ctx.fillStyle = word.color;
-    ctx.globalAlpha = word.opacity;
-    ctx.fillText(word.text, word.x, word.y);
   });
 
   ctx.globalAlpha = 1;
@@ -793,6 +878,7 @@ clearBtn.addEventListener('click', () => {
   llmOutputEl.innerHTML = '';
   glyphs.length = 0;
   glyphRail.innerHTML = '';
+  imageCache.clear();
 });
 
 speedSlider.addEventListener('input', (e) => {
@@ -865,6 +951,12 @@ screenshotBtn.addEventListener('click', () => {
   link.download = `mindflow-${Date.now()}.png`;
   link.href = canvas.toDataURL('image/png');
   link.click();
+});
+
+viewModeBtn.addEventListener('click', () => {
+  viewMode = viewMode === 'words' ? 'images' : 'words';
+  viewModeBtn.textContent = viewMode === 'words' ? 'Words' : 'Images';
+  viewModeBtn.classList.toggle('active', viewMode === 'images');
 });
 
 // ── Start ──────────────────────────────────────────────────
