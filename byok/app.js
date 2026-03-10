@@ -161,9 +161,11 @@ async function callLLM(systemPrompt, userPrompt) {
       tokenCountEl.textContent = totalTokens.toLocaleString();
     }
 
-    // Extract text content
+    // Extract text content, strip markdown fences if present
     if (data.content && data.content[0]) {
-      return data.content[0].text;
+      let text = data.content[0].text;
+      text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '');
+      return text.trim();
     }
     return null;
   } catch (err) {
