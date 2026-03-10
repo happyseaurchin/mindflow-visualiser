@@ -49,16 +49,9 @@ const PALETTE = [
   '#6abebe','#f49b7a','#ab8fd0','#7bafc8','#c8a47b',
   '#8bbe7b','#be7b9b'
 ];
-const CONCEPT_PALETTE = [
-  'rgba(120, 180, 140, 0.15)', 'rgba(140, 160, 200, 0.15)',
-  'rgba(200, 160, 120, 0.15)', 'rgba(180, 140, 180, 0.15)',
-  'rgba(140, 200, 180, 0.15)'
-];
-const CONCEPT_TEXT_PALETTE = [
-  '#78b48c','#8ca0c8','#c8a078','#b48cb4','#8cc8b4'
-];
+const CONCEPT_BG = 'rgba(255, 255, 255, 0.12)';
+const CONCEPT_TEXT = '#1a1a1a';
 let colorIdx = 0;
-let conceptColorIdx = 0;
 
 // ── Settings ───────────────────────────────────────────────
 
@@ -231,7 +224,7 @@ async function callLLMStreaming(systemPrompt, userPrompt, textEl) {
             fullText += event.delta.text;
             textEl.textContent = fullText;
             // Auto-scroll LLM panel
-            llmOutputEl.scrollTop = llmOutputEl.scrollHeight;
+            llmOutputEl.parentElement.scrollTop = llmOutputEl.parentElement.scrollHeight;
           }
         } catch (e) {
           // skip unparseable lines
@@ -276,22 +269,42 @@ async function runConceptExtraction() {
   entry.appendChild(textEl);
   entry.appendChild(conceptsEl);
   llmOutputEl.appendChild(entry);
-  llmOutputEl.scrollTop = llmOutputEl.scrollHeight;
+  llmOutputEl.parentElement.scrollTop = llmOutputEl.parentElement.scrollHeight;
 
   const result = await callLLMStreaming(
-    'You analyse speech transcripts. Return ONLY valid JSON, no markdown fences.',
-    `Identify 1-5 underlying concepts — abstract ideas the speaker is circling around but may not have named directly. For each, give the concept as a single lowercase word and list which spoken words it relates to.
+    'You analyse speech transcripts. First write 1-3 sentences explaining what underlying themes you notice — what the speaker seems to be circling around. Then on a new line write EXACTLY the marker ---JSON--- followed by a JSON object. No markdown fences.',
+    `Here is recent speech. Explain briefly what themes or undercurrents you detect, then extract 1-5 concepts — abstract ideas the speaker may not have named directly.
 
 Speech: "${recentText}"
 
-Return JSON: {"concepts": [{"word": "emergence", "related": ["pattern", "complex", "system"]}]}`,
+Format your response as:
+[your 1-3 sentence explanation]
+---JSON---
+{"concepts": [{"word": "emergence", "related": ["pattern", "complex", "system"]}]}`,
     textEl
   );
 
   if (!result) return;
 
   try {
-    const parsed = JSON.parse(result);
+    // Split on the JSON marker
+    const markerIdx = result.indexOf('---JSON---');
+    let jsonStr;
+    if (markerIdx >= 0) {
+      jsonStr = result.slice(markerIdx + 10).trim();
+      // Clean the display: remove the JSON part, keep only explanation
+      const explanation = result.slice(0, markerIdx).trim();
+      textEl.textContent = explanation;
+    } else {
+      // Fallback: try to find JSON in the response
+      const jsonMatch = result.match(/\{[\s\S]*"concepts"[\s\S]*\}/);
+      if (!jsonMatch) return;
+      jsonStr = jsonMatch[0];
+    }
+
+    // Strip markdown fences if present
+    jsonStr = jsonStr.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+    const parsed = JSON.parse(jsonStr);
     if (!parsed.concepts || !Array.isArray(parsed.concepts)) return;
 
     const injected = [];
@@ -304,12 +317,11 @@ Return JSON: {"concepts": [{"word": "emergence", "related": ["pattern", "complex
       if (words.has(cWord) && words.get(cWord).source === 'speech') {
         const existing = words.get(cWord);
         existing.promoted = true;
-        existing.bgColor = CONCEPT_PALETTE[conceptColorIdx % CONCEPT_PALETTE.length];
-        injected.push(cWord + ' (promoted)');
+        existing.bgColor = CONCEPT_BG;
+        injected.push(cWord + ' ✓');
       } else if (!words.has(cWord)) {
         // Inject as new concept word
         const spawnPos = getConceptSpawnPosition(related);
-        const ci = conceptColorIdx % CONCEPT_TEXT_PALETTE.length;
         words.set(cWord, {
           text: cWord,
           frequency: 1,
@@ -322,9 +334,9 @@ Return JSON: {"concepts": [{"word": "emergence", "related": ["pattern", "complex
           fontSize: 12,
           targetFontSize: 12,
           opacity: 0,
-          targetOpacity: 0.8,
-          color: CONCEPT_TEXT_PALETTE[ci],
-          bgColor: CONCEPT_PALETTE[ci],
+          targetOpacity: 0.85,
+          color: CONCEPT_TEXT,
+          bgColor: CONCEPT_BG,
           birthTime: Date.now(),
           lastMentioned: Date.now(),
           pulse: 1.3,
@@ -333,7 +345,6 @@ Return JSON: {"concepts": [{"word": "emergence", "related": ["pattern", "complex
         });
         injected.push(cWord);
       }
-      conceptColorIdx++;
     });
 
     if (injected.length > 0) {
@@ -438,7 +449,7 @@ function addFinalTranscript(text) {
   p.className = 'final';
   p.textContent = text;
   transcriptEl.appendChild(p);
-  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  transcriptEl.parentElement.scrollTop = transcriptEl.parentElement.scrollHeight;
 
   const interim = transcriptEl.querySelector('.interim');
   if (interim) interim.remove();
@@ -455,7 +466,7 @@ function updateInterimDisplay(text) {
     transcriptEl.appendChild(el);
   }
   el.textContent = text;
-  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  transcriptEl.parentElement.scrollTop = transcriptEl.parentElement.scrollHeight;
 }
 
 // ── Text Processing ────────────────────────────────────────
@@ -734,7 +745,6 @@ clearBtn.addEventListener('click', () => {
   sentences.length = 0;
   lastSpokenWord = null;
   colorIdx = 0;
-  conceptColorIdx = 0;
   sentencesSinceLastConcept = 0;
   llmOutputEl.innerHTML = '';
 });
