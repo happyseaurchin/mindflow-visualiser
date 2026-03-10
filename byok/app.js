@@ -420,7 +420,10 @@ function renderGlyphRail() {
 function highlightGlyphWords(glyph) {
   glyph.wordsAtTime.forEach(text => {
     const w = words.get(text);
-    if (w) w.pulse = 1.5;
+    if (!w) return;
+    w.frequency += 1;
+    w.lastMentioned = Date.now();
+    w.pulse = 1.4;
   });
 }
 
