@@ -61,7 +61,8 @@ let colorIdx = 0;
 const settings = {
   decayMultiplier: 1,
   minFrequency: 1,
-  speed: 0.3
+  speed: 0.3,
+  scale: 1
 };
 
 // ── DOM refs ───────────────────────────────────────────────
@@ -89,6 +90,7 @@ const tokenCountEl = document.getElementById('token-count');
 const llmStatus = document.getElementById('llm-status');
 const glyphRail = document.getElementById('glyph-rail');
 const viewModeBtn = document.getElementById('view-mode-btn');
+const scaleSlider = document.getElementById('scale-slider');
 
 let frozen = false;
 
@@ -702,6 +704,9 @@ function updatePhysics() {
       }
     }
 
+    // Apply global scale
+    word.targetFontSize *= settings.scale;
+
     const sp = settings.speed;
     word.vx += (word.targetX - word.x) * 0.005 * sp;
     word.vy += (word.targetY - word.y) * 0.005 * sp;
@@ -892,6 +897,10 @@ decaySlider.addEventListener('input', (e) => {
 minFreqSlider.addEventListener('input', (e) => {
   settings.minFrequency = parseInt(e.target.value);
   minFreqVal.textContent = e.target.value;
+});
+
+scaleSlider.addEventListener('input', (e) => {
+  settings.scale = parseFloat(e.target.value);
 });
 
 freezeBtn.addEventListener('click', () => {
