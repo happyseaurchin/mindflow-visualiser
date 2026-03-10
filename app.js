@@ -51,7 +51,8 @@ let colorIdx = 0;
 
 const settings = {
   decayMultiplier: 1,
-  minFrequency: 1
+  minFrequency: 1,
+  speed: 0.3
 };
 
 // ── DOM refs ───────────────────────────────────────────────
@@ -61,6 +62,7 @@ const ctx = canvas.getContext('2d');
 const transcriptEl = document.getElementById('transcript');
 const micBtn = document.getElementById('mic-btn');
 const clearBtn = document.getElementById('clear-btn');
+const speedSlider = document.getElementById('speed-slider');
 const decaySlider = document.getElementById('decay-slider');
 const minFreqSlider = document.getElementById('min-freq-slider');
 const minFreqVal = document.getElementById('min-freq-val');
@@ -295,13 +297,15 @@ function updatePhysics() {
       word.targetOpacity = 1;
     }
 
-    // Spring toward target (gentle)
-    word.vx += (word.targetX - word.x) * 0.005;
-    word.vy += (word.targetY - word.y) * 0.005;
+    // Spring toward target (scaled by speed)
+    const sp = settings.speed;
+    word.vx += (word.targetX - word.x) * 0.005 * sp;
+    word.vy += (word.targetY - word.y) * 0.005 * sp;
 
-    // Damping
-    word.vx *= 0.97;
-    word.vy *= 0.95;
+    // Damping (heavier at low speed for less jitter)
+    const damp = 1 - (0.08 / sp);
+    word.vx *= damp;
+    word.vy *= damp;
 
     word.x += word.vx;
     word.y += word.vy;
@@ -349,8 +353,8 @@ function updatePhysics() {
       if (Math.abs(dx) < minDistX && Math.abs(dy) < minDistY) {
         const overlapX = minDistX - Math.abs(dx);
         const overlapY = minDistY - Math.abs(dy);
-        const pushX = (dx === 0 ? 1 : Math.sign(dx)) * overlapX * 0.05;
-        const pushY = (dy === 0 ? 1 : Math.sign(dy)) * overlapY * 0.05;
+        const pushX = (dx === 0 ? 1 : Math.sign(dx)) * overlapX * 0.05 * settings.speed;
+        const pushY = (dy === 0 ? 1 : Math.sign(dy)) * overlapY * 0.05 * settings.speed;
 
         a.vx -= pushX;
         a.vy -= pushY;
@@ -403,6 +407,10 @@ clearBtn.addEventListener('click', () => {
   sentences.length = 0;
   lastSpokenWord = null;
   colorIdx = 0;
+});
+
+speedSlider.addEventListener('input', (e) => {
+  settings.speed = parseFloat(e.target.value);
 });
 
 decaySlider.addEventListener('input', (e) => {
