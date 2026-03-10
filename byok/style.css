@@ -11,7 +11,7 @@ body {
 #app {
   display: grid;
   grid-template-columns: 30% 70%;
-  grid-template-rows: 1fr auto;
+  grid-template-rows: 1fr auto auto;
   height: 100vh;
 }
 
@@ -98,6 +98,60 @@ body {
   width: 100%;
   height: 100%;
   display: block;
+}
+
+/* ── Glyph Rail ────────────────────────────────────── */
+
+#glyph-rail {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.4rem 0.8rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  min-height: 0;
+  border-top: 1px solid #1a1a2e;
+  background: #0c0c14;
+  scrollbar-width: none;
+}
+
+#glyph-rail::-webkit-scrollbar { display: none; }
+
+#glyph-rail:empty { display: none; }
+
+.glyph {
+  flex-shrink: 0;
+  padding: 0.3rem 0.7rem;
+  border-radius: 12px;
+  font-size: 0.72rem;
+  cursor: pointer;
+  border: 1px solid;
+  opacity: 0.85;
+  transition: opacity 0.15s, transform 0.15s;
+  white-space: nowrap;
+}
+
+.glyph:hover {
+  opacity: 1;
+  transform: scale(1.05);
+}
+
+.glyph-warm {
+  background: rgba(240, 120, 90, 0.2);
+  border-color: rgba(240, 120, 90, 0.5);
+  color: #f0a090;
+}
+
+.glyph-cool {
+  background: rgba(90, 150, 240, 0.2);
+  border-color: rgba(90, 150, 240, 0.5);
+  color: #90b8f0;
+}
+
+.glyph-neutral {
+  background: rgba(180, 180, 200, 0.15);
+  border-color: rgba(180, 180, 200, 0.4);
+  color: #b8b8d0;
 }
 
 /* ── Controls ───────────────────────────────────────── */

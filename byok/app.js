@@ -8,6 +8,7 @@ let llmActive = false;
 let totalTokens = 0;
 let lastConceptCall = Date.now();
 let sentencesSinceLastConcept = 0;
+const glyphs = [];
 
 const STOP_WORDS = new Set([
   'i','me','my','myself','we','our','ours','ourselves','you','your','yours',
@@ -84,6 +85,7 @@ const clearKeyBtn = document.getElementById('clear-key-btn');
 const closeSettingsBtn = document.getElementById('close-settings-btn');
 const tokenCountEl = document.getElementById('token-count');
 const llmStatus = document.getElementById('llm-status');
+const glyphRail = document.getElementById('glyph-rail');
 
 let frozen = false;
 
@@ -273,14 +275,14 @@ async function runConceptExtraction() {
 
   const result = await callLLMStreaming(
     'You analyse speech transcripts. First write 1-3 sentences explaining what underlying themes you notice — what the speaker seems to be circling around. Then on a new line write EXACTLY the marker ---JSON--- followed by a JSON object. No markdown fences.',
-    `Here is recent speech. Explain briefly what themes or undercurrents you detect, then extract 1-5 concepts — abstract ideas the speaker may not have named directly.
+    `Here is recent speech. Explain briefly what themes or undercurrents you detect, then extract 1-5 concepts — abstract ideas the speaker may not have named directly. Also synthesise a 2-6 word glyph phrase that captures the core idea of this stretch of thinking, and indicate its tone (warm, cool, or neutral).
 
 Speech: "${recentText}"
 
 Format your response as:
 [your 1-3 sentence explanation]
 ---JSON---
-{"concepts": [{"word": "emergence", "related": ["pattern", "complex", "system"]}]}`,
+{"glyph": "searching for connection", "tone": "warm", "concepts": [{"word": "emergence", "related": ["pattern", "complex", "system"]}]}`,
     textEl
   );
 
@@ -359,6 +361,17 @@ Format your response as:
     } else {
       setLLMStatus('No new concepts');
     }
+
+    // Add glyph to the rail
+    if (parsed.glyph) {
+      glyphs.push({
+        text: parsed.glyph,
+        tone: parsed.tone || 'neutral',
+        time: Date.now(),
+        wordsAtTime: [...words.keys()].slice(-20),
+      });
+      renderGlyphRail();
+    }
   } catch (e) {
     setLLMStatus('Parse error', 'error');
     conceptsEl.textContent = '(parse error)';
@@ -387,6 +400,28 @@ function getConceptSpawnPosition(relatedWords) {
     x: w / 2 + (Math.random() - 0.5) * 200,
     y: h / 2 + (Math.random() - 0.5) * 150
   };
+}
+
+// ── Glyph Rail ────────────────────────────────────────────
+
+function renderGlyphRail() {
+  glyphRail.innerHTML = '';
+  glyphs.forEach(glyph => {
+    const el = document.createElement('div');
+    el.className = `glyph glyph-${glyph.tone}`;
+    el.textContent = glyph.text;
+    el.title = new Date(glyph.time).toLocaleTimeString();
+    el.addEventListener('click', () => highlightGlyphWords(glyph));
+    glyphRail.appendChild(el);
+  });
+  glyphRail.scrollLeft = glyphRail.scrollWidth;
+}
+
+function highlightGlyphWords(glyph) {
+  glyph.wordsAtTime.forEach(text => {
+    const w = words.get(text);
+    if (w) w.pulse = 1.5;
+  });
 }
 
 // ── LLM Timer ─────────────────────────────────────────────
@@ -753,6 +788,8 @@ clearBtn.addEventListener('click', () => {
   colorIdx = 0;
   sentencesSinceLastConcept = 0;
   llmOutputEl.innerHTML = '';
+  glyphs.length = 0;
+  glyphRail.innerHTML = '';
 });
 
 speedSlider.addEventListener('input', (e) => {
