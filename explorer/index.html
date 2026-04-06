@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MindFlow Explorer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Left panel -->
+    <div id="left-panel">
+      <div class="panel-header">
+        <h2>Explorer</h2>
+        <div id="mode-tabs">
+          <button class="tab-btn active" data-mode="explore">Explore</button>
+          <button class="tab-btn" data-mode="live">Live</button>
+        </div>
+      </div>
+
+      <!-- Explore mode -->
+      <div id="explore-panel" class="active">
+        <div class="load-buttons">
+          <button class="load-btn" data-block="starstone">Starstone</button>
+          <button class="load-btn" data-block="starstone-lean">Starstone Lean</button>
+          <label class="file-upload-label">
+            Upload JSON
+            <input type="file" id="file-upload" accept=".json">
+          </label>
+        </div>
+        <!-- JSON editor (tree view) -->
+        <textarea id="json-editor" placeholder="Paste a pscale JSON block here..."></textarea>
+        <!-- Spindle reader (column view) — replaces JSON editor -->
+        <div id="left-spindle">
+          <div id="spindle-address"></div>
+          <div id="spindle-entries">
+            <div class="left-spindle-empty">Click a card to see its spindle</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Live mode -->
+      <div id="live-panel">
+        <div class="live-controls">
+          <button id="mic-btn">Mic Off</button>
+          <label class="file-upload-label">
+            Upload Transcript
+            <input type="file" id="transcript-upload" accept=".txt,.json,.md">
+          </label>
+          <span id="compile-status"></span>
+        </div>
+        <div id="transcript"></div>
+      </div>
+    </div>
+
+    <!-- Tree panel -->
+    <div id="tree-panel">
+      <svg id="tree-svg"></svg>
+    </div>
+
+    <!-- Column panel (Gingko-style) -->
+    <div id="column-panel"></div>
+
+    <!-- Spindle panel -->
+    <div id="spindle-panel">
+      <h3>Spindle</h3>
+      <div id="spindle-content"></div>
+    </div>
+
+    <!-- Controls -->
+    <div id="controls">
+      <button id="view-tree">Tree</button>
+      <button id="view-columns" class="active">Columns</button>
+      <span style="color:#2a2a3e">│</span>
+      <button id="zoom-fit">Fit</button>
+      <button id="zoom-in">+</button>
+      <button id="zoom-out">−</button>
+      <button id="save-json">Save JSON</button>
+      <button id="open-converter">Converter</button>
+      <span class="spacer" style="flex:1"></span>
+      <input type="password" id="api-key-input" placeholder="Anthropic API key (for live mode)">
+    </div>
+  </div>
+
+  <!-- Converter modal -->
+  <div id="converter-modal">
+    <div class="converter-content">
+      <div class="converter-header">
+        <h2>pscale ↔ Gingko Converter</h2>
+        <button id="converter-close">✕</button>
+      </div>
+      <div class="converter-body">
+        <div class="converter-col">
+          <div class="converter-col-header">
+            <label>pscale JSON</label>
+            <button id="conv-download-pscale">download</button>
+          </div>
+          <textarea id="conv-pscale" placeholder='Paste pscale JSON here...'></textarea>
+          <button id="conv-to-gingko">Convert to Gingko &#x2192;</button>
+        </div>
+        <div class="converter-col">
+          <div class="converter-col-header">
+            <label>Gingko JSON</label>
+            <button id="conv-download-gingko">download</button>
+          </div>
+          <textarea id="conv-gingko" placeholder="Gingko JSON output appears here..."></textarea>
+          <button id="conv-to-pscale">&#x2190; Convert to pscale</button>
+        </div>
+      </div>
+      <div class="converter-actions">
+        <button id="conv-load-current">&#x21BB; Load current block</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
